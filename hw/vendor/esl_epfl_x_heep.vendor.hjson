@@ -1,0 +1,12 @@
+// Copyright 2023 David Mallasen Quintana
+// Solderpad Hardware License, Version 2.1, see LICENSE.md for details.
+// SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+{
+  name: "esl_epfl_x_heep",
+  target_dir: "esl_epfl_x_heep",
+
+  upstream: {
+    url: "https://github.com/davidmallasen/x-heep.git",
+    rev: "a9cee0ba362f7fb65208acc0ccc9fc633c3bf886",
+  },
+}
