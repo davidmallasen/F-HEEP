@@ -17,6 +17,8 @@
 
 MAKE = make
 
+.PHONY: all vendor sim sim-opt synth-pynq-z2 clean help
+
 all: help
 
 vendor: vendor-fpu vendor-fpu-divsqrt vendor-xheep

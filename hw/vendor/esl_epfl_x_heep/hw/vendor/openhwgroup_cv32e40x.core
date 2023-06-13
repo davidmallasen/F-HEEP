@@ -54,7 +54,6 @@ filesets:
       - openhwgroup_cv32e40x/rtl/cv32e40x_pma.sv
       - openhwgroup_cv32e40x/rtl/cv32e40x_pc_target.sv
       - openhwgroup_cv32e40x/rtl/cv32e40x_wpt.sv
-      - openhwgroup_cv32e40x/rtl/cv32e40x_align_check.sv
     file_type: systemVerilogSource
 
   files_clk_gate:

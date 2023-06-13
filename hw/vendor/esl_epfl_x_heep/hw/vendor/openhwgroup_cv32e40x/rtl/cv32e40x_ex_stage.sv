@@ -147,11 +147,10 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
 
   // Exception happened during IF or ID, or trigger match in ID (converted to NOP).
   // signal needed for ex_valid to go high in such cases
-  assign previous_exception = (id_ex_pipe_i.illegal_insn                     ||
-                               id_ex_pipe_i.instr.bus_resp.err               ||
-                               (id_ex_pipe_i.instr.mpu_status != MPU_OK)     ||
-                               (id_ex_pipe_i.instr.align_status != ALIGN_OK) ||
-                               id_ex_pipe_i.trigger_match)                   &&
+  assign previous_exception = (id_ex_pipe_i.illegal_insn                 ||
+                               id_ex_pipe_i.instr.bus_resp.err           ||
+                               (id_ex_pipe_i.instr.mpu_status != MPU_OK) ||
+                               id_ex_pipe_i.trigger_match)               &&
                               id_ex_pipe_i.instr_valid;
 
   // ALU write port mux
@@ -428,7 +427,6 @@ module cv32e40x_ex_stage import cv32e40x_pkg::*;
       end else if (wb_ready_i) begin
         // we are ready for a new instruction, but there is none available,
         // so we introduce a bubble
-        ex_wb_pipe_o.xif_en      <= 1'b0;
         ex_wb_pipe_o.instr_valid <= 1'b0;
       end
     end

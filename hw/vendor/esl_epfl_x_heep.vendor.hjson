@@ -6,7 +6,7 @@
   target_dir: "esl_epfl_x_heep",
 
   upstream: {
-    url: "https://github.com/davidmallasen/x-heep.git",
-    rev: "a9cee0ba362f7fb65208acc0ccc9fc633c3bf886",
+    url: "https://github.com/esl-epfl/x-heep.git",
+    rev: "ad7bbc2021becbe75bc30b7a4db18d64f78cf2d5",
   },
 }

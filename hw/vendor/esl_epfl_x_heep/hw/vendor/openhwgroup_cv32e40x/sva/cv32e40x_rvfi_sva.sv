@@ -28,9 +28,7 @@ module cv32e40x_rvfi_sva
   import cv32e40x_pkg::*;
   import cv32e40x_rvfi_pkg::*;
 #(
-    parameter bit     CLIC  = 0,
-    parameter bit     DEBUG = 1,
-    parameter a_ext_e A_EXT = A_NONE
+    parameter bit SMCLIC = 0
 )
 (
    input logic             clk_i,
@@ -67,20 +65,13 @@ module cv32e40x_rvfi_sva
    input logic [1:0]       obi_instr_rptr_q_inc,
    input logic [1:0]       obi_instr_rptr_q,
    input logic             mret_ptr_wb,
-   input logic [31:0]      instr_rdata_wb_past,
-   input lsu_atomic_e      lsu_atomic_wb_i,
-   input logic             lsu_en_wb_i,
-   input logic             lsu_split_q_wb_i,
-   input logic             pc_mux_exception
-
+   input logic [31:0]      instr_rdata_wb_past
 );
 
-  if (CLIC) begin
-    a_mret_pointer :
-      assert property (@(posedge clk_i) disable iff (!rst_ni)
-                    (mret_ptr_wb |-> (instr_rdata_wb_past == 32'h30200073)))
-      else `uvm_error("rvfi", "mret not in STAGE_WB_PAST when mret pointer arrived in WB")
-  end
+  a_mret_pointer :
+    assert property (@(posedge clk_i) disable iff (!rst_ni)
+                  (mret_ptr_wb |-> (instr_rdata_wb_past == 32'h30200073)))
+    else `uvm_error("rvfi", "mret not in STAGE_WB_PAST when mret pointer arrived in WB")
 
   // Check that irq_ack results in RVFI capturing a trap
   // Ideally, we should assert that every irq_ack eventually leads to rvfi_intr,
@@ -106,42 +97,6 @@ module cv32e40x_rvfi_sva
       $sformatf("Every irq_ack should be followed by the corresponding rvfi_intr"));
 
 
-  // Sequence used to locate rvfi_valid following rvfi_valid with prereq set
-  sequence s_goto_next_rvfi_valid(prereq);
-    (prereq && rvfi_valid) ##1 rvfi_valid[->1];
-  endsequence
-
-  logic no_debug;
-
-  // Indicate debug mode, or single stepping
-  assign no_debug = !(rvfi_csr_dcsr_rdata[2] || ctrl_fsm_i.debug_mode);
-
-  // rvfi_trap should always be followed by rvfi_intr (as long as we're not in debug mode)
-  a_rvfi_trap_intr :
-    assert property (@(posedge clk_i) disable iff (!rst_ni)
-                     no_debug throughout s_goto_next_rvfi_valid(|rvfi_trap) |->
-                     rvfi_intr.intr)
-      else `uvm_error("rvfi", "rvfi_trap not followed by rvfi_intr")
-
-  // Exception code in rvfi_trap.exception_cause should align with mcause exception cause in the following retired instruction
-  // This is exempt if we have an NMI, because NMI will result in mcause being updated in between retired instructions.
-  // Also, in debug mode, mcause is not updated.
-  a_rvfi_trap_mcause_align:
-    assert property (@(posedge clk_i) disable iff (!rst_ni)
-                    (no_debug && !ctrl_fsm_i.pending_nmi) throughout s_goto_next_rvfi_valid(|rvfi_trap) |->
-                     rvfi_intr.intr && (rvfi_csr_mcause_rdata[5:0] == $past(rvfi_trap.exception_cause)))
-      else `uvm_error("rvfi", "rvfi_trap.exception_cause not consistent with mcause[5:0] in following retired instruction")
-
-
-  // Check that the trap is always signalled on the instruction before single step debug entry (unless killed by interrupt)
-  a_rvfi_single_step_no_trap_no_dbg_entry:
-    assert property (@(posedge clk_i) disable iff (!rst_ni)
-                     s_goto_next_rvfi_valid(rvfi_trap.debug_cause != DBG_CAUSE_STEP) |-> ((rvfi_dbg != DBG_CAUSE_STEP) || rvfi_intr.intr))
-     else `uvm_error("rvfi", "Single step debug entry without correct rvfi_trap first")
-
-
-
-if (DEBUG) begin
   // Helper signal, indicating debug cause
   // Special case for debug entry from debug mode caused by EBREAK as it is not captured by debug_cause_i
   logic [2:0] debug_cause_int;
@@ -181,136 +136,79 @@ if (DEBUG) begin
                      (rvfi_dbg_ack |-> (dbg_ack_cnt != 0)))
       else `uvm_error("rvfi", "rvfi_dbg not preceeded by dbg_ack")
 
+
+  // Sequence used to locate rvfi_valid following rvfi_valid with prereq set
+  sequence s_goto_next_rvfi_valid(prereq);
+    (prereq && rvfi_valid) ##1 rvfi_valid[->1];
+  endsequence
+
+  logic no_debug;
+
+  // Indicate debug mode, or single stepping
+  assign no_debug = !(rvfi_csr_dcsr_rdata[2] || ctrl_fsm_i.debug_mode);
+
+  // rvfi_trap should always be followed by rvfi_intr (as long as we're not in debug mode)
+  a_rvfi_trap_intr :
+    assert property (@(posedge clk_i) disable iff (!rst_ni)
+                     no_debug throughout s_goto_next_rvfi_valid(|rvfi_trap) |->
+                     rvfi_intr.intr)
+      else `uvm_error("rvfi", "rvfi_trap not followed by rvfi_intr")
+
   // rvfi_trap[2] should always be followed by rvfi_dbg
   a_rvfi_trap_dbg :
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                    s_goto_next_rvfi_valid(rvfi_trap.debug) |->
-                    rvfi_dbg != '0)
-    else `uvm_error("rvfi", "rvfi_trap.debug not followed by rvfi_dbg")
+    assert property (@(posedge clk_i) disable iff (!rst_ni)
+                     s_goto_next_rvfi_valid(rvfi_trap.debug) |->
+                     rvfi_dbg != '0)
+      else `uvm_error("rvfi", "rvfi_trap.debug not followed by rvfi_dbg")
+
+  // Exception code in rvfi_trap.exception_cause should align with mcause exception cause in the following retired instruction
+  // This is exempt if we have an NMI, because NMI will result in mcause being updated in between retired instructions.
+  // Also, in debug mode, mcause is not updated.
+  a_rvfi_trap_mcause_align:
+    assert property (@(posedge clk_i) disable iff (!rst_ni)
+                    (no_debug && !ctrl_fsm_i.pending_nmi) throughout s_goto_next_rvfi_valid(|rvfi_trap) |->
+                     rvfi_intr.intr && (rvfi_csr_mcause_rdata[5:0] == $past(rvfi_trap.exception_cause)))
+      else `uvm_error("rvfi", "rvfi_trap.exception_cause not consistent with mcause[5:0] in following retired instruction")
 
   // Exception code in rvfi_trap[11:9] should align with rvfi_dbg the following retired instruction
   a_rvfi_trap_rvfi_dbg_align:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                    s_goto_next_rvfi_valid(rvfi_trap.debug) |->
-                    rvfi_dbg == $past(rvfi_trap.debug_cause))
-    else `uvm_error("rvfi", "rvfi_trap.debug_cause not consistent with rvfi_dbg in following retired instruction")
+    assert property (@(posedge clk_i) disable iff (!rst_ni)
+                     s_goto_next_rvfi_valid(rvfi_trap.debug) |->
+                     rvfi_dbg == $past(rvfi_trap.debug_cause))
+     else `uvm_error("rvfi", "rvfi_trap.debug_cause not consistent with rvfi_dbg in following retired instruction")
 
   // Check that rvfi_trap always indicate single step if rvfi_trap[2:1] == 2'b11
   a_rvfi_single_step_trap:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                    rvfi_trap.exception && rvfi_trap.debug |-> rvfi_trap.debug_cause == DBG_CAUSE_STEP)
-    else `uvm_error("rvfi", "rvfi_trap[2:1] == 2'b11, but debug cause bits do not indicate single stepping")
+    assert property (@(posedge clk_i) disable iff (!rst_ni)
+                     rvfi_trap.exception && rvfi_trap.debug |-> rvfi_trap.debug_cause == DBG_CAUSE_STEP)
+     else `uvm_error("rvfi", "rvfi_trap[2:1] == 2'b11, but debug cause bits do not indicate single stepping")
+
+  // Check that the trap is always signalled on the instruction before single step debug entry (unless killed by interrupt)
+  a_rvfi_single_step_no_trap_no_dbg_entry:
+    assert property (@(posedge clk_i) disable iff (!rst_ni)
+                     s_goto_next_rvfi_valid(rvfi_trap.debug_cause != DBG_CAUSE_STEP) |-> ((rvfi_dbg != DBG_CAUSE_STEP) || rvfi_intr.intr))
+     else `uvm_error("rvfi", "Single step debug entry without correct rvfi_trap first")
 
   // Check that dcsr.cause and mcause exception align with rvfi_trap when rvfi_trap[2:1] == 2'b11
   // rvfi_intr should also always be set in this case
   a_rvfi_trap_step_exception:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                    s_goto_next_rvfi_valid(rvfi_trap.exception && rvfi_trap.debug) |->
-                    (rvfi_dbg == DBG_CAUSE_STEP) && (rvfi_csr_dcsr_rdata[8:6] == DBG_CAUSE_STEP) &&
-                    (rvfi_csr_mcause_rdata[5:0] == $past(rvfi_trap.exception_cause)) &&
-                    rvfi_intr.intr)
-    else `uvm_error("rvfi", "dcsr.cause, mcause and rvfi_intr not as expected following an exception during single step")
+    assert property (@(posedge clk_i) disable iff (!rst_ni)
+                     s_goto_next_rvfi_valid(rvfi_trap.exception && rvfi_trap.debug) |->
+                     (rvfi_dbg == DBG_CAUSE_STEP) && (rvfi_csr_dcsr_rdata[8:6] == DBG_CAUSE_STEP) &&
+                     (rvfi_csr_mcause_rdata[5:0] == $past(rvfi_trap.exception_cause)) &&
+                     rvfi_intr.intr)
+     else `uvm_error("rvfi", "dcsr.cause, mcause and rvfi_intr not as expected following an exception during single step")
 
   // When dcsr.nmip is set, the next retired instruction should be the NMI handler (except in debug mode).
-  // rvfi_intr should also be set. Checking when ctrl_fsm_i.nmi_mtvec_is stable as the mtvec index may change in CLINT mode.
+  // rvfi_intr should also be set.
   a_rvfi_nmip_nmi_handler:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                    (no_debug && $stable(mtvec_addr_i) && $stable(ctrl_fsm_i.nmi_mtvec_index)) throughout s_goto_next_rvfi_valid(rvfi_csr_dcsr_rdata[3]) |->
-                    rvfi_intr.intr &&
-                    (rvfi_pc_rdata == {mtvec_addr_i, ctrl_fsm_i.nmi_mtvec_index, 2'b00}) &&
-                    ((rvfi_csr_mcause_rdata[10:0] == INT_CAUSE_LSU_LOAD_FAULT) || (rvfi_csr_mcause_rdata[10:0] == INT_CAUSE_LSU_STORE_FAULT)))
-    else `uvm_error("rvfi", "dcsr.nmip not followed by rvfi_intr and NMI handler")
-end
+    assert property (@(posedge clk_i) disable iff (!rst_ni)
+                     (no_debug && $stable(mtvec_addr_i)) throughout s_goto_next_rvfi_valid(rvfi_csr_dcsr_rdata[3]) |->
+                     rvfi_intr.intr &&
+                     (rvfi_pc_rdata == {mtvec_addr_i, ctrl_fsm_i.nmi_mtvec_index, 2'b00}) &&
+                     ((rvfi_csr_mcause_rdata[10:0] == INT_CAUSE_LSU_LOAD_FAULT) || (rvfi_csr_mcause_rdata[10:0] == INT_CAUSE_LSU_STORE_FAULT)))
+      else `uvm_error("rvfi", "dcsr.nmip not followed by rvfi_intr and NMI handler")
 
-if ((A_EXT == A) || (A_EXT == ZALRSC)) begin
-  // Aligned atomics blocked by the PMA shall use the EXC_CAUSE_LOAD_FAULT or EXC_CAUSE_STORE_FAULT exception codes with
-  // cause_type MEM_ERR_ATOMIC.
-  //
-  // Misaligned atomics to a non-main PMA region shall use EXC_CAUSE_LOAD_FAULT or EXC_CAUSE_STORE_FAULT exception codes with
-  // cause_type MEM_ERR_IO_ALIGN
-  //
-  // Misaligned atomics which are otherwise not blocked by the PMA (cfg is main and atomic) shall use either
-  // EXC_CAUSE_LOAD_MISALIGNED or EXC_CAUSE_STORE_MISALIGNED with cause_type MEM_ERR_IO_ALIGN.
-  a_aligned_lr_access_fault_trap:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                  pc_mux_exception && (lsu_atomic_wb_i == AT_LR) && lsu_en_wb_i &&
-                  !lsu_split_q_wb_i
-                  |=>
-                  rvfi_valid &&
-                  (rvfi_trap.cause_type == MEM_ERR_ATOMIC) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_LOAD_FAULT))
-    else `uvm_error("rvfi", "Exception on aligned LR.W atomic instruction did not set correct cause_type in rvfi_trap")
-
-  a_misaligned_lr_access_fault_trap:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                  pc_mux_exception && (lsu_atomic_wb_i == AT_LR) && lsu_en_wb_i &&
-                  lsu_split_q_wb_i
-                  |=>
-                  rvfi_valid &&
-                  ((rvfi_trap.cause_type == MEM_ERR_IO_ALIGN) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_LOAD_MISALIGNED))
-                  or
-                  ((rvfi_trap.cause_type == MEM_ERR_ATOMIC) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_LOAD_FAULT))
-                  or
-                  ((rvfi_trap.cause_type == MEM_ERR_IO_ALIGN) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_LOAD_FAULT)))
-    else `uvm_error("rvfi", "Exception on misaligned LR.W atomic instruction did not set correct cause_type in rvfi_trap")
-
-  a_aligned_sc_access_fault_trap:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                  pc_mux_exception && (lsu_atomic_wb_i == AT_SC) && lsu_en_wb_i &&
-                  !lsu_split_q_wb_i
-                  |=>
-                  rvfi_valid &&
-                  (rvfi_trap.cause_type == MEM_ERR_ATOMIC) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT))
-    else `uvm_error("rvfi", "Exception on aligned SC.W atomic instruction did not set correct cause_type in rvfi_trap")
-
-  a_misaligned_sc_access_fault_trap:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                  pc_mux_exception && (lsu_atomic_wb_i == AT_SC) && lsu_en_wb_i &&
-                  lsu_split_q_wb_i
-                  |=>
-                  rvfi_valid &&
-                  ((rvfi_trap.cause_type == MEM_ERR_IO_ALIGN) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_MISALIGNED))
-                  or
-                  ((rvfi_trap.cause_type == MEM_ERR_ATOMIC) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT))
-                  or
-                  ((rvfi_trap.cause_type == MEM_ERR_IO_ALIGN) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT)))
-    else `uvm_error("rvfi", "Exception on misaligned SC.W atomic instruction did not set correct cause_type in rvfi_trap")
-end
-
-if (A_EXT == A) begin
-  a_aligned_amo_access_fault_trap:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                  pc_mux_exception && (lsu_atomic_wb_i == AT_AMO) && lsu_en_wb_i &&
-                  !lsu_split_q_wb_i
-                  |=>
-                  rvfi_valid &&
-                  (rvfi_trap.cause_type == MEM_ERR_ATOMIC) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT))
-    else `uvm_error("rvfi", "Exception on aligned AMO* atomic instruction did not set correct cause_type in rvfi_trap")
-
-  a_misaligned_amo_access_fault_trap:
-  assert property (@(posedge clk_i) disable iff (!rst_ni)
-                  pc_mux_exception && (lsu_atomic_wb_i == AT_AMO) && lsu_en_wb_i &&
-                  lsu_split_q_wb_i
-                  |=>
-                  rvfi_valid &&
-                  ((rvfi_trap.cause_type == MEM_ERR_IO_ALIGN) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_MISALIGNED))
-                  or
-                  ((rvfi_trap.cause_type == MEM_ERR_ATOMIC) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT))
-                  or
-                  ((rvfi_trap.cause_type == MEM_ERR_IO_ALIGN) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT)))
-    else `uvm_error("rvfi", "Exception on misaligned AMO* atomic instruction did not set correct cause_type in rvfi_trap")
-end
 
   /* TODO: Add back in.
      Currently, the alignment buffer can interpret pointers as compressed instructions and pass on two "instructions" from the IF stage.

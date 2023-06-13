@@ -27,26 +27,21 @@ module cv32e40x_rvfi_data_obi import cv32e40x_pkg::*; import cv32e40x_rvfi_pkg::
 (
   input logic           clk,
   input logic           rst_n,
-  input obi_data_req_t  buffer_trans_i,
-  input logic           buffer_trans_valid_i,
-  output obi_data_req_t lsu_data_trans_o,
-  output logic          lsu_data_trans_valid_o
+  input obi_data_req_t  buffer_trans,
+  output obi_data_req_t lsu_data_trans
 );
 
   // Intermediate rotate signal, as direct part-select not supported in all tools
   logic [63:0] buffer_trans_wdata_ror;
 
   // Rotate right
-  assign buffer_trans_wdata_ror = {buffer_trans_i.wdata, buffer_trans_i.wdata} >> (8*buffer_trans_i.addr[1:0]);
-
-  // Feed valid through
-  assign lsu_data_trans_valid_o = buffer_trans_valid_i;
+  assign buffer_trans_wdata_ror = {buffer_trans.wdata, buffer_trans.wdata} >> (8*buffer_trans.addr[1:0]);
 
   always_comb begin
-    lsu_data_trans_o = buffer_trans_i;
+    lsu_data_trans = buffer_trans;
 
     // Align Memory write data
-    lsu_data_trans_o.wdata = buffer_trans_wdata_ror;
+    lsu_data_trans.wdata = buffer_trans_wdata_ror;
   end
 
 endmodule

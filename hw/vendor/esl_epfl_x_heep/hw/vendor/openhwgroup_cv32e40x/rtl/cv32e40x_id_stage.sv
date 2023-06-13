@@ -33,13 +33,13 @@
 module cv32e40x_id_stage import cv32e40x_pkg::*;
 #(
   parameter rv32_e       RV32                   = RV32I,
-  parameter a_ext_e      A_EXT                  = A_NONE,
+  parameter bit          A_EXT                  = 0,
   parameter b_ext_e      B_EXT                  = B_NONE,
   parameter m_ext_e      M_EXT                  = M,
   parameter bit          X_EXT                  = 0,
   parameter              DEBUG_TRIGGER_EN       = 1,
   parameter int unsigned REGFILE_NUM_READ_PORTS = 2,
-  parameter bit          CLIC                   = 1
+  parameter bit          SMCLIC                 = 1
 )
 (
   input  logic        clk,                    // Gated clock
@@ -99,7 +99,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
 
   // eXtension interface
   if_xif.cpu_issue    xif_issue_if,
-  if_xif.cpu_mem      xif_mem_if,
   output logic        xif_offloading_o
 );
 
@@ -424,7 +423,7 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
     .B_EXT                           ( B_EXT                     ),
     .M_EXT                           ( M_EXT                     ),
     .DEBUG_TRIGGER_EN                ( DEBUG_TRIGGER_EN          ),
-    .CLIC                            ( CLIC                      )
+    .SMCLIC                          ( SMCLIC                    )
   )
   decoder_i
   (
@@ -667,7 +666,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
           id_ex_pipe_o.instr.bus_resp.rdata <= {16'h0, if_id_pipe_i.compressed_instr};
           id_ex_pipe_o.instr.bus_resp.err   <= if_id_pipe_i.instr.bus_resp.err;
           id_ex_pipe_o.instr.mpu_status     <= if_id_pipe_i.instr.mpu_status;
-          id_ex_pipe_o.instr.align_status   <= if_id_pipe_i.instr.align_status;
         end else begin
           id_ex_pipe_o.instr                <= if_id_pipe_i.instr;
         end
@@ -684,10 +682,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
 
       end else if (ex_ready_i) begin
         id_ex_pipe_o.instr_valid            <= 1'b0;
-        id_ex_pipe_o.xif_en                 <= 1'b0;
-      end else if (xif_mem_if.mem_valid && xif_mem_if.mem_ready) begin
-        id_ex_pipe_o.instr_valid            <= 1'b0;
-        id_ex_pipe_o.xif_en                 <= 1'b0;
       end
     end
   end
