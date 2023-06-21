@@ -6,8 +6,8 @@
   target_dir: "pulp_platform_fpu_ss",
 
   upstream: {
-    url: "https://github.com/davidmallasen/fpu_ss.git",
-    rev: "134436312e886b824c3e543b934d669e9b3656c6",
+    url: "https://github.com/pulp-platform/fpu_ss.git",
+    rev: "b6d51740de1f31958e7d6447fbf4d4c5f3893c1b",
   },
 
   exclude_from_upstream: [
