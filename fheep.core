@@ -29,16 +29,21 @@ filesets:
 
   ip_fpga:
     files:
-      - hw/vendor/esl_epfl_x_heep/hw/fpga/scripts/xilinx_generate_clk_wizard.tcl: { file_type: tclSource }
+      - hw/fpga/scripts/set_design_properties.tcl:  { file_type: tclSource }
       - hw/vendor/esl_epfl_x_heep/hw/fpga/scripts/generate_sram.tcl: { file_type: tclSource }
       - hw/vendor/esl_epfl_x_heep/hw/fpga/prim_xilinx_clk.sv
-      - hw/vendor/esl_epfl_x_heep/hw/fpga/cv32e40x_xilinx_clock_gate.sv
+      - hw/vendor/esl_epfl_x_heep/hw/fpga/cv32e40px_xilinx_clock_gate.sv
       - hw/vendor/esl_epfl_x_heep/hw/fpga/pad_cell_input_xilinx.sv
       - hw/vendor/esl_epfl_x_heep/hw/fpga/pad_cell_output_xilinx.sv
       - hw/vendor/esl_epfl_x_heep/hw/fpga/pad_cell_inout_xilinx.sv
       - hw/vendor/esl_epfl_x_heep/hw/fpga/pad_cell_bypass_input_xilinx.sv
       - hw/vendor/esl_epfl_x_heep/hw/fpga/pad_cell_bypass_output_xilinx.sv
     file_type: systemVerilogSource
+
+  ip_fpga_pynq_z2:
+    files:
+      - hw/vendor/esl_epfl_x_heep/hw/fpga/scripts/pynq-z2/xilinx_generate_clk_wizard.tcl
+    file_type: tclSource
 
   xdc_fpga_pynq_z2:
     files:
@@ -72,22 +77,12 @@ filesets:
     file_type: user
 
 parameters:
-  PULP_XPULP:
-    datatype: int
-    paramtype: vlogparam
-    default: 0
   JTAG_DPI:
     datatype: int
     paramtype: vlogparam
+    description: |
+      Enables testbench JTAG DIPs. Admitted values: 1|0.
     default: 0
-  USE_EXTERNAL_DEVICE_EXAMPLE:
-    datatype: bool
-    paramtype: vlogdefine
-    default: false
-  USE_UPF:
-    datatype: bool
-    paramtype: vlogdefine
-    default: false
   SYNTHESIS:
     datatype: bool
     paramtype: vlogdefine
@@ -128,11 +123,7 @@ targets:
         - tool_modelsim? (pre_build_remote_bitbang)
         - tool_modelsim? (pre_patch_modelsim_Makefile) # this is required by Questa 2020 on
     parameters:
-      - PULP_XPULP=0
-      - use_jtag_dpi? (JTAG_DPI=1)
-      - "!use_jtag_dpi? (JTAG_DPI=0)"
-      - use_external_device_example? (USE_EXTERNAL_DEVICE_EXAMPLE=true)
-      - use_upf? (USE_UPF=true)
+      - JTAG_DPI
     tools:
       modelsim:
         vlog_options:
@@ -152,9 +143,9 @@ targets:
     filesets_append:
       - rtl_fpga
       - ip_fpga
+      - ip_fpga_pynq_z2
       - xdc_fpga_pynq_z2
     parameters:
-      - PULP_XPULP=0
       - SYNTHESIS=true
     tools:
       vivado:

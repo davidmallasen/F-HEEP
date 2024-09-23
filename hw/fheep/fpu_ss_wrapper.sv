@@ -37,6 +37,7 @@ module fpu_ss_wrapper #(
 );
 
   fpu_ss #(
+    .PulpDivsqrt(1'b0),
     .PULP_ZFINX(PULP_ZFINX),
     .INPUT_BUFFER_DEPTH(INPUT_BUFFER_DEPTH),
     .OUT_OF_ORDER(OUT_OF_ORDER),
