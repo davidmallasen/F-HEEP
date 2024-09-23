@@ -15,7 +15,7 @@
 # Author: Jose Miranda (jose.mirandacalero@epfl.ch)
 
 # set(RISCV  /home/$ENV{USER}/tools/riscv)
-set(RISCV_GITHUB_GCC_COMPILER  $ENV{RISCV}/bin/riscv32-unknown-elf-gcc)
+set(RISCV_GITHUB_GCC_COMPILER  $ENV{RISCV}/bin/$ENV{COMPILER_PREFIX}elf-gcc)
 set(RISCV_GITHUB_CLANG_COMPILER  $ENV{RISCV}/bin/clang)
 #message("RISC-V GCC cross-compiler is in : ${RISCV_GCC_COMPILER}") 
 
@@ -43,7 +43,7 @@ get_filename_component(RISCV_TOOLCHAIN_BIN_EXT ${RISCV_GCC_COMPILER} EXT)
 
 #message( "RISC-V GCC Path: ${RISCV_TOOLCHAIN_BIN_PATH}" )
 
-STRING(REGEX REPLACE "\-gcc" "-" GCC_CROSS_COMPILE ${RISCV_GCC_COMPILER})
+STRING(REGEX REPLACE "\-gcc$" "-" GCC_CROSS_COMPILE ${RISCV_GCC_COMPILER})
 if ($ENV{COMPILER} MATCHES "clang")
      STRING(REGEX REPLACE "clang" "" CLANG_CROSS_COMPILE ${RISCV_CLANG_COMPILER})
 endif()
@@ -102,7 +102,7 @@ endif()
 set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g" )
 set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=${CMAKE_SYSTEM_PROCESSOR}" )
 if ($ENV{COMPILER} MATCHES "clang")
-     set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-command-line-argument --target=riscv32 --gcc-toolchain=$ENV{RISCV} --sysroot=$ENV{RISCV}/riscv32-unknown-elf" )
+     set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-command-line-argument --target=riscv32 --gcc-toolchain=$ENV{RISCV} --sysroot=$ENV{RISCV}/$ENV{COMPILER_PREFIX}elf" )
 endif()
 
 set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS}" CACHE STRING "" )

@@ -19,13 +19,7 @@ MAKE = make
 
 all: help
 
-vendor: vendor-fpu vendor-fpu-divsqrt vendor-xheep
-
-vendor-fpu:
-	./util/vendor.py hw/vendor/pulp_platform_fpu_ss.vendor.hjson -v --update
-
-vendor-fpu-divsqrt:
-	./util/vendor.py hw/vendor/pulp_platform_fpu_div_sqrt_mvp.vendor.hjson -v --update
+vendor: vendor-xheep
 
 vendor-xheep:
 	./util/vendor.py hw/vendor/esl_epfl_x_heep.vendor.hjson -v --update

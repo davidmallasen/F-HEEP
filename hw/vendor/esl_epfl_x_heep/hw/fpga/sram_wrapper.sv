@@ -22,19 +22,28 @@ module sram_wrapper #(
     input logic [AddrWidth-1:0] addr_i,
     input logic [31:0] wdata_i,
     input logic [3:0] be_i,
-    input logic [core_v_mini_mcu_pkg::NUM_BANKS-1:0] set_retentive_i,
+    // power manager signals that goes to the ASIC macros
+    input logic pwrgate_ni,
+    output logic pwrgate_ack_no,
+    input logic set_retentive_ni,
     // output ports
     output logic [31:0] rdata_o
 );
 
-  xilinx_mem_gen_0 tc_ram_i (
-      .clka (clk_i),
-      .ena  (req_i),
-      .wea  ({4{req_i & we_i}} & be_i),
-      .addra(addr_i),
-      .dina (wdata_i),
-      // output ports
-      .douta(rdata_o)
-  );
+  assign pwrgate_ack_no = pwrgate_ni;
 
+
+  if (NumWords == 32'd8192) begin
+    xilinx_mem_gen_8192 tc_ram_i (
+        .clka (clk_i),
+        .ena  (req_i),
+        .wea  ({4{req_i & we_i}} & be_i),
+        .addra(addr_i),
+        .dina (wdata_i),
+        // output ports
+        .douta(rdata_o)
+    );
+  end else begin
+    $error("Bank size not generated.");
+  end
 endmodule

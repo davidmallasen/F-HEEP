@@ -8,7 +8,7 @@ ENTRY(_start)
 MEMORY
 {
     FLASH (rx)      : ORIGIN = 0x${flash_mem_start_address}, LENGTH = 0x${flash_mem_size_address}
-    RAM (xrw)       : ORIGIN = 0x${'{:08X}'.format(int(ram_start_address,16) + 4)}, LENGTH = 0x${'{:08X}'.format(int(ram_size_address,16) - 4)}
+    RAM (xrw)       : ORIGIN = 0x${f'{xheep.ram_start_address()+4:08X}'}, LENGTH = 0x${f'{xheep.ram_size_address()-4:08X}'}
 }
 
 SECTIONS {
@@ -17,14 +17,14 @@ SECTIONS {
     PROVIDE(__boot_address = 0x40000180);
 
     /* stack and heap related settings */
-    __stack_size = DEFINED(__stack_size) ? __stack_size : 0x1000;
+    __stack_size = DEFINED(__stack_size) ? __stack_size : 0x${stack_size};
     PROVIDE(__stack_size = __stack_size);
-    __heap_size = DEFINED(__heap_size) ? __heap_size : 0x1000;
+    __heap_size = DEFINED(__heap_size) ? __heap_size : 0x${heap_size};
 
     /* interrupt vectors */
     .vectors (ORIGIN(FLASH)):
     {
-      PROVIDE(_vector_start = .);
+      PROVIDE(__vector_start = .);
       KEEP(*(.vectors));
     } >FLASH
 
@@ -70,6 +70,8 @@ SECTIONS {
         _edata = .;        /* define a global symbol at data end; used by startup code in order to initialise the .data section in RAM */
     } >RAM AT >FLASH
 
+    _lma_vma_data_offset = 0x0;
+
     .power_manager : ALIGN(4096)
     {
        PROVIDE(__power_manager_start = .);
@@ -80,7 +82,7 @@ SECTIONS {
     .bss :
     {
         . = ALIGN(4);
-        _sbss = .;         /* define a global symbol at bss start; used by startup code */
+        __bss_start = .;         /* define a global symbol at bss start; used by startup code */
         *(.bss)
         *(.bss*)
         *(.sbss)
@@ -88,7 +90,7 @@ SECTIONS {
         *(COMMON)
 
         . = ALIGN(4);
-        _ebss = .;         /* define a global symbol at bss end; used by startup code */
+        __bss_end = .;         /* define a global symbol at bss end; used by startup code */
         __BSS_END__ = .;
     } >RAM
 

@@ -20,8 +20,9 @@ MEMORY
   /* Our testbench is a bit weird in that we initialize the RAM (thus
      allowing initialized sections to be placed there). Infact we dump all
      sections to ram. */
-  ram0 (rwxai) : ORIGIN = 0x${linker_onchip_code_start_address}, LENGTH = 0x${linker_onchip_code_size_address}
-  ram1 (rwxai) : ORIGIN = 0x${linker_onchip_data_start_address}, LENGTH = 0x${linker_onchip_data_size_address}
+  % for i, section in enumerate(xheep.iter_linker_sections()):
+    ram${i} (rwxai) : ORIGIN = ${f"{section.start:#08x}"}, LENGTH = ${f"{section.size:#08x}"}
+% endfor
 }
 
 /*
@@ -35,50 +36,12 @@ SECTIONS
   PROVIDE(__boot_address = 0x180);
 
   /* stack and heap related settings */
-  __stack_size = DEFINED(__stack_size) ? __stack_size : 0x1000;
+  __stack_size = DEFINED(__stack_size) ? __stack_size : 0x${stack_size};
   PROVIDE(__stack_size = __stack_size);
-  __heap_size = DEFINED(__heap_size) ? __heap_size : 0x1000;
+  __heap_size = DEFINED(__heap_size) ? __heap_size : 0x${heap_size};
 
   /* Read-only sections, merged into text segment: */
   PROVIDE (__executable_start = SEGMENT_START("text-segment", 0x10000)); . = SEGMENT_START("text-segment", 0x10000) + SIZEOF_HEADERS;
-
-  /* We don't do any dynamic linking so we remove everything related to it */
-/*
-  .interp         : { *(.interp) }
-  .note.gnu.build-id : { *(.note.gnu.build-id) }
-  .hash           : { *(.hash) }
-  .gnu.hash       : { *(.gnu.hash) }
-  .dynsym         : { *(.dynsym) }
-  .dynstr         : { *(.dynstr) }
-  .gnu.version    : { *(.gnu.version) }
-  .gnu.version_d  : { *(.gnu.version_d) }
-  .gnu.version_r  : { *(.gnu.version_r) }
-  .rela.dyn       :
-    {
-      *(.rela.init)
-      *(.rela.text .rela.text.* .rela.gnu.linkonce.t.*)
-      *(.rela.fini)
-      *(.rela.rodata .rela.rodata.* .rela.gnu.linkonce.r.*)
-      *(.rela.data .rela.data.* .rela.gnu.linkonce.d.*)
-      *(.rela.tdata .rela.tdata.* .rela.gnu.linkonce.td.*)
-      *(.rela.tbss .rela.tbss.* .rela.gnu.linkonce.tb.*)
-      *(.rela.ctors)
-      *(.rela.dtors)
-      *(.rela.got)
-      *(.rela.sdata .rela.sdata.* .rela.gnu.linkonce.s.*)
-      *(.rela.sbss .rela.sbss.* .rela.gnu.linkonce.sb.*)
-      *(.rela.sdata2 .rela.sdata2.* .rela.gnu.linkonce.s2.*)
-      *(.rela.sbss2 .rela.sbss2.* .rela.gnu.linkonce.sb2.*)
-      *(.rela.bss .rela.bss.* .rela.gnu.linkonce.b.*)
-      PROVIDE_HIDDEN (__rela_iplt_start = .);
-      *(.rela.iplt)
-      PROVIDE_HIDDEN (__rela_iplt_end = .);
-    }
-  .rela.plt       :
-    {
-      *(.rela.plt)
-    }
-*/
 
   /* interrupt vectors */
   .vectors (ORIGIN(ram0)):
@@ -94,11 +57,6 @@ SECTIONS
     KEEP (*(.text.start))
   } >ram0
 
-  /* More dynamic linking sections */
-/*
-  .plt            : { *(.plt) }
-  .iplt           : { *(.iplt) }
-*/
 
   /* the bulk of the program: main, libc, functions etc. */
   .text           :
@@ -265,6 +223,8 @@ SECTIONS
     *(.data1)
   } >ram1
 
+  _lma_vma_data_offset = 0x0;
+
   /* no dynamic linking, no object tables required */
   /* .got            : { *(.got.plt) *(.igot.plt) *(.got) *(.igot) } */
 
@@ -331,6 +291,17 @@ SECTIONS
    PROVIDE(__stack_end = .);
    PROVIDE(__freertos_irq_stack_top = .);
   } >ram1
+
+% for i, section in enumerate(xheep.iter_linker_sections()):
+% if not section.name in ["code", "data"]:
+  .${section.name} :
+  {
+    . = ALIGN(4);
+    *(.xheep_${section.name})
+    . = ALIGN(4);
+  } >ram${i}
+% endif
+% endfor
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }

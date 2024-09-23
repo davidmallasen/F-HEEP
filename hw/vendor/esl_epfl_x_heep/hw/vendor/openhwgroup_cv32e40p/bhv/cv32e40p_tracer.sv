@@ -30,8 +30,8 @@ module cv32e40p_tracer
   import cv32e40p_pkg::*;
   import uvm_pkg::*;
 #(
-    parameter FPU = 0,
-    parameter PULP_ZFINX = 0
+    parameter FPU   = 0,
+    parameter ZFINX = 0
 ) (
     // Clock and Reset
     input logic clk_i,
@@ -112,8 +112,8 @@ module cv32e40p_tracer
   assign #0.01 clk_i_d = clk_i;
   assign eval_comb = ~(clk_i & ~clk_i_d);
 
-  event   ovp_retire;
-  bit     use_iss;
+  //event   ovp_retire;
+  //bit     use_iss;
 
   integer f;
   string  fn;
@@ -185,13 +185,14 @@ module cv32e40p_tracer
     $sformat(info_tag, "CORE_TRACER %2d", hart_id_i);
     $display("[%s] Output filename is: %s", info_tag, fn);
     f = $fopen(fn, "w");
-    $fwrite(f, "Time\tCycle\tPC\tInstr\tDecoded instruction\tRegister and memory contents\n");
+    $fwrite(f,
+            "            Time           Cycle PC       Instr    Ctx Decoded instruction Register and memory contents\n");
   end
 
-  initial begin
-    use_iss = 0;
-    if ($test$plusargs("USE_ISS")) use_iss = 1;
-  end
+  //initial begin
+  //  use_iss = 0;
+  //  if ($test$plusargs("USE_ISS")) use_iss = 1;
+  //end
 
   always @(trace_ex or trace_ex_delay or trace_wb or trace_wb_delay or trace_retire) begin
     pc_ex_stage = (trace_ex != null) ? trace_ex.pc : 'x;
@@ -271,7 +272,7 @@ module cv32e40p_tracer
     trace_retire.printInstrTrace();
 
     ->retire;
-    if (use_iss) @(ovp_retire);
+    //  if (use_iss) @(ovp_retire);
     #0.1ns;
   end
 
@@ -477,7 +478,7 @@ module cv32e40p_tracer
     end
 
     if (move_trace_ex_to_trace_wb && move_trace_ex_delay_to_trace_wb) begin
-      `uvm_error(info_tag, "ex delay stage and ex stage collide");
+      `uvm_info(info_tag, "ex delay stage and ex stage collide", UVM_DEBUG);
     end
   end
 
@@ -505,11 +506,9 @@ module cv32e40p_tracer
           end
           trace_ex.got_regs_write = 1;
         end else begin
-          `uvm_error(info_tag, $sformatf(
-                     "EX: Reg WR %02d:0x%08x but no active EX instruction",
-                     ex_reg_addr,
-                     ex_reg_wdata
-                     ));
+          `uvm_info(info_tag, $sformatf(
+                    "EX: Reg WR %02d:0x%08x but no active EX instruction", ex_reg_addr, ex_reg_wdata
+                    ), UVM_DEBUG);
         end
       end
 
@@ -532,11 +531,9 @@ module cv32e40p_tracer
         end else if (!trace_ex_is_null && !trace_ex.got_regs_write && trace_ex.misaligned) begin
           // Do nothing as double load concatenation will be managed by trace_wb
         end else begin
-          `uvm_error(info_tag, $sformatf(
-                     "WB: Reg WR %02d:0x%08x but no active WB instruction",
-                     wb_reg_addr,
-                     wb_reg_wdata
-                     ));
+          `uvm_info(info_tag, $sformatf(
+                    "WB: Reg WR %02d:0x%08x but no active WB instruction", wb_reg_addr, wb_reg_wdata
+                    ), UVM_DEBUG);
         end
       end
 
@@ -549,12 +546,12 @@ module cv32e40p_tracer
           `uvm_info(info_tag, $sformatf("EX: Mem RD 0x%08x", ex_data_addr), UVM_DEBUG);
         end
         if (trace_ex_is_null) begin
-          `uvm_error(info_tag, $sformatf(
-                     "EX: Mem %s 0x%08x:0x%08x but no active EX instruction",
-                     ex_data_we ? "WR" : "RD",
-                     ex_data_addr,
-                     ex_reg_wdata
-                     ));
+          `uvm_info(info_tag, $sformatf(
+                    "EX: Mem %s 0x%08x:0x%08x but no active EX instruction",
+                    ex_data_we ? "WR" : "RD",
+                    ex_data_addr,
+                    ex_reg_wdata
+                    ), UVM_DEBUG);
         end else apply_mem_access(trace_ex, ex_data_we, ex_data_addr, ex_data_wdata);
       end
     end

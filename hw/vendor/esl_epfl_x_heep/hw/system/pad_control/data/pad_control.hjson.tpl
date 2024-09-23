@@ -16,25 +16,26 @@
       swaccess: "rw",
       hwaccess: "hro",
       fields: [
-        { bits: "3:0", name: "PAD_MUX_${pad.name.upper()}", desc: "Pad Mux ${pad.name.upper()} Reg" }
+        { bits: "${(len(pad.pad_mux_list)-1).bit_length()-1}:0", name: "PAD_MUX_${pad.name.upper()}", desc: "Pad Mux ${pad.name.upper()} Reg" }
       ]
     }
 
 % endfor
 
+% if pads_attributes != None:
 % for pad in total_pad_list:
     { name:     "PAD_ATTRIBUTE_${pad.name.upper()}",
       desc:     "${pad.name} Attributes (Pull Up En, Pull Down En, etc. It is technology specific.",
-      resval:   "0x00"
+      resval:   "${pads_attributes['resval']}"
       swaccess: "rw",
       hwaccess: "hro",
       fields: [
-        { bits: "7:0", name: "PAD_ATTRIBUTE_${pad.name.upper()}", desc: "Pad Attribute ${pad.name.upper()} Reg" }
+        { bits: "${pads_attributes['bits']}", name: "PAD_ATTRIBUTE_${pad.name.upper()}", desc: "Pad Attribute ${pad.name.upper()} Reg" }
       ]
     }
 
 % endfor
-
+% endif
 
    ]
 }

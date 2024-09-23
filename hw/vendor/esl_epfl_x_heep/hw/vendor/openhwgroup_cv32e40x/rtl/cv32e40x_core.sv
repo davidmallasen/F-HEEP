@@ -400,7 +400,7 @@ module cv32e40x_core import cv32e40x_pkg::*;
   assign dbg_ack   = ctrl_fsm.dbg_ack;
 
   // Gate off the internal debug_request signal if debug support is not configured.
-  assign debug_req_gated = DEBUG ? debug_req_i : 1'b0;
+  assign debug_req_gated = (DEBUG != 0) ? debug_req_i : 1'b0;
 
   //////////////////////////////////////////////////////////////////////////////////////////////
   //   ____ _            _      __  __                                                   _    //
@@ -577,7 +577,6 @@ module cv32e40x_core import cv32e40x_pkg::*;
 
     // eXtension interface
     .xif_issue_if                 ( xif_issue_if              ),
-    .xif_mem_if                   ( xif_mem_if                ),
     .xif_offloading_o             ( xif_offloading_id         )
   );
 
@@ -1006,7 +1005,6 @@ module cv32e40x_core import cv32e40x_pkg::*;
 
     // eXtension interface
     .xif_commit_if                  ( xif_commit_if          ),
-    .xif_mem_if                     ( xif_mem_if             ),
     .xif_csr_error_i                ( xif_csr_error_ex       )
   );
 

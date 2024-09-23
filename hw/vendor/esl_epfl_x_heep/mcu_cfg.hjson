@@ -7,25 +7,9 @@
 
     cpu_type: cv32e20
 
-    bus_type: onetoM
-
-    ram: {
-        address: 0x00000000, #only tried with 0, cannot be changed for now
-        numbanks: 2, #each bank is 32kB, cannot be changed for now
-    },
-
     linker_script: {
-        #value used for the on-chip linker script, the on-flash linker script is generated using FLASH values and the whole RAM values
-        onchip_ls: {
-            code: {
-                address: 0x00000000,
-                lenght: 0x0000A200, #minimum size for freeRTOS
-            }
-            data: {
-                address: 0x0000A200,
-                lenght: whatisleft, #keyword used to calculate the size as: ram.length - code.lenght
-            }
-        },
+        stack_size: 0x800,
+        heap_size: 0x800,
     }
 
     debug: {
@@ -53,10 +37,12 @@
             offset:  0x00028000,
             length:  0x00008000,
         },
-        spi_host: {
+        dma: {
             offset:  0x00030000,
             length:  0x00010000,
-            path:    "./hw/vendor/lowrisc_opentitan_spi_host/data/spi_host.hjson"
+            ch_length:    0x100,
+            num_channels:   0x1,
+            path:    "./hw/ip/dma/data/dma.hjson"
         },
         power_manager: {
             offset:  0x00040000,
@@ -67,30 +53,25 @@
             offset:  0x00050000,
             length:  0x00010000,
         },
-        dma: {
-            offset:  0x00060000,
-            length:  0x00010000,
-            path:    "./hw/ip/dma/data/dma.hjson"
-        },
         fast_intr_ctrl: {
-            offset:  0x00070000,
+            offset:  0x00060000,
             length:  0x00010000,
             path:    "./hw/ip/fast_intr_ctrl/data/fast_intr_ctrl.hjson"
         },
         ext_peripheral: {
-            offset:  0x00080000,
+            offset:  0x00070000,
             length:  0x00010000,
         },
         pad_control: {
-            offset:  0x00090000,
+            offset:  0x00080000,
             length:  0x00010000,
         },
         gpio_ao: {
-            offset:  0x000A0000,
+            offset:  0x00090000,
             length:  0x00010000,
         },
         uart: {
-            offset:  0x000B0000,
+            offset:  0x000A0000,
             length:  0x00010000,
             path:    "./hw/vendor/lowrisc_opentitan/hw/ip/uart/data/uart.hjson"
         },
@@ -102,27 +83,51 @@
         rv_plic: {
             offset:  0x00000000,
             length:  0x00010000,
+            is_included: "yes",
             path:    "./hw/vendor/lowrisc_opentitan/hw/ip/rv_plic/data/rv_plic.hjson"
+        },
+        spi_host: {
+            offset:  0x00010000,
+            length:  0x00010000,
+            is_included: "yes",
+            path:    "./hw/vendor/lowrisc_opentitan_spi_host/data/spi_host.hjson"
         },
         gpio: {
             offset:  0x00020000,
             length:  0x00010000,
+            is_included: "yes",
             path:    "./hw/vendor/pulp_platform_gpio/gpio_regs.hjson"
         },
         i2c: {
             offset:  0x00030000,
             length:  0x00010000,
+            is_included: "yes",
             path:    "./hw/vendor/lowrisc_opentitan/hw/ip/i2c/data/i2c.hjson"
         },
         rv_timer: {
             offset:  0x00040000,
             length:  0x00010000,
+            is_included: "yes",
             path:    "./hw/vendor/lowrisc_opentitan/hw/ip/rv_timer/data/rv_timer.hjson"
         },
         spi2: {
             offset:  0x00050000,
             length:  0x00010000,
+            is_included: "yes",
         },
+        pdm2pcm: {
+            offset:  0x00060000,
+            length:  0x00010000,
+            is_included: "no",
+            path:    "./hw/ip/pdm2pcm/data/pdm2pcm.hjson"
+        },
+        i2s: {
+            offset:  0x00070000,
+            length:  0x00010000,
+            is_included: "yes",
+            path:    "./hw/ip/i2s/data/i2s.hjson"
+        },
+
     },
 
     flash_mem: {
@@ -189,6 +194,8 @@
             intr_ack_stop:           47,
             intr_host_timeout:       48,
             spi2_intr_event:         49,
+            i2s_intr_event:          50,
+            dma_window_intr:         51,
         }
     }
 }

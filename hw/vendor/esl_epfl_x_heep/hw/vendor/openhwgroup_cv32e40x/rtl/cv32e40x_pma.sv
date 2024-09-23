@@ -42,8 +42,6 @@ module cv32e40x_pma import cv32e40x_pkg::*;
   output logic        pma_cacheable_o
 );
 
-  parameter PMA_ADDR_LSB = 0; // TODO:OE experiment and see if this makes a difference
-
   // Attributes for accessing the DM (DM_REGION_START:DM_REGION_END) in debug mode
   localparam pma_cfg_t PMA_DBG = '{word_addr_low   : '0, // not used
                                    word_addr_high  : '0, // not used
@@ -83,8 +81,8 @@ module cv32e40x_pma import cv32e40x_pkg::*;
         pma_cfg = PMA_R_DEFAULT;
 
         for(int i = PMA_NUM_REGIONS-1; i >= 0; i--)  begin
-          if((word_addr[31:PMA_ADDR_LSB] >= PMA_CFG[i].word_addr_low[31:PMA_ADDR_LSB]) &&
-             (word_addr[31:PMA_ADDR_LSB] <  PMA_CFG[i].word_addr_high[31:PMA_ADDR_LSB])) begin
+          if((word_addr >= PMA_CFG[i].word_addr_low) &&
+             (word_addr <  PMA_CFG[i].word_addr_high)) begin
             pma_cfg = PMA_CFG[i];
           end
         end
@@ -100,7 +98,7 @@ module cv32e40x_pma import cv32e40x_pkg::*;
 
   // Tie of atomic attribute if A_EXT=0
   generate
-    if (A_EXT) begin: pma_atomic
+    if (A_EXT != A_NONE) begin: pma_atomic
       assign pma_cfg_atomic = pma_cfg.atomic;
     end
     else begin: pma_no_atomic

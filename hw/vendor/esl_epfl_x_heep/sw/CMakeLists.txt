@@ -42,7 +42,7 @@ if(NOT WIN32)
 endif()
 
 # set the project name
-project(${PROJECT} ASM C)
+project(${PROJECT} ASM C CXX)
 
 # set the required CMake standard
 set(CMAKE_CXX_STANDARD 14)
@@ -50,28 +50,222 @@ set(CMAKE_CXX_STANDARD 14)
 # Set MAIN file
 SET(MAINFILE "main")
 
+
+#######################################################################
+#      FIND HEADER FILES TO BE INCLUDED
+#######################################################################
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Preliminary list of header files inside the source path
+
+# Make a list of the header files that need to be included
+FILE(GLOB_RECURSE new_list FOLLOW_SYMLINKS ${SOURCE_PATH}*.h)
+SET(dir_list_str "")
+FOREACH(file_path ${new_list})
+  SET(add 0) # This variable is set to 1 if the file_pth needs to be added to the list
+  if(${file_path} MATCHES "${SOURCE_PATH}device/")
+    if(${file_path} MATCHES "${SOURCE_PATH}device/target/") # Add it if its not in target, or if its in target/${TARGET}
+      if(${file_path} MATCHES "${SOURCE_PATH}device/target/${TARGET}")
+        SET(add 1)
+      endif()
+    else()
+      SET(add 1)
+    endif()
+  elseif(${file_path} MATCHES ${SOURCE_PATH}applications/${PROJECT}/)
+    SET(add 1)
+  elseif( ( ${file_path} MATCHES "${SOURCE_PATH}freertos/" ) AND ( ${PROJECT} MATCHES "freertos" ) )
+    SET(add 1)
+  elseif( ${file_path} MATCHES "${SOURCE_PATH}external/" )
+    SET(add 1)
+  endif()
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Prune list
+
+  if( add EQUAL 1 ) # If the file path mathced one of the criterion, add it to the list
+    # Get the path of the obtained directory
+    GET_FILENAME_COMPONENT(dir_path ${file_path} PATH)
+
+    # Add it to the string format list
+    SET(dir_list_str ${dir_list_str} "-I ${dir_path} \
+    ")
+    
+    # Add it to the header list
+    SET(h_dir_list_ ${h_dir_list_} "${dir_path}")
+  endif()
+
+ENDFOREACH()
+
+LIST(REMOVE_DUPLICATES dir_list_str) 
+string(REPLACE ";" "" dir_list_str ${dir_list_str}) #This has been moved here to avoid multiple includes of the same path, see: https://github.com/esl-epfl/x-heep/issues/470
+LIST(REMOVE_DUPLICATES h_dir_list_)
+
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Add list to the directories to be included
+
+# Get all the folders to include when linking
+SET(INCLUDE_FOLDERS "-I ${RISCV}/${COMPILER_PREFIX}elf/include \
+                     -I ${RISCV}/${COMPILER_PREFIX}elf/include/ \
+                     -I ${ROOT_PROJECT} \
+                     -I ${SOURCE_PATH} \
+					           ${dir_list_str}")                                      
+
+#######################################################################
+#      FIND SOURCE FILES TO BE INCLUDED
+#######################################################################
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Preliminary list of source files inside the source path
+
+# Make a list of the .c source files that need to be linked
+FILE(GLOB_RECURSE c_files FOLLOW_SYMLINKS ${SOURCE_PATH}*.c)
+# Make a list of the .s source files that need to be linked
+FILE(GLOB_RECURSE s_files FOLLOW_SYMLINKS ${SOURCE_PATH}*.s)
+# Make a list of the .S source files that need to be linked
+FILE(GLOB_RECURSE S_files FOLLOW_SYMLINKS ${SOURCE_PATH}*.S)
+# Make a list of the .cpp source files that need to be linked
+FILE(GLOB_RECURSE cpp_files FOLLOW_SYMLINKS ${SOURCE_PATH}*.cpp)
+SET(new_list ${c_files} ${s_files} ${S_files} ${cpp_files})
+
+SET( c_dir_list "" )
+SET( app_found 0 )
+FOREACH(file_path IN LISTS new_list)
+  SET(add 0) # This variable is set to 1 if the file_pth needs to be added to the list
+  if(${file_path} MATCHES "${SOURCE_PATH}device/")
+    if(NOT ${file_path} MATCHES  ".*/crt/.*") 
+      SET(add 1)
+    endif()
+  elseif( (${file_path} MATCHES "${SOURCE_PATH}external/") AND ( NOT  ${file_path} MATCHES "exclude" ) )
+    SET(add 1)
+  elseif( ${file_path} MATCHES "${SOURCE_PATH}applications/${PROJECT}/.*${MAINFILE}\." ) # look for main.*
+    SET(app_found 1)
+  elseif( ${file_path} MATCHES "${SOURCE_PATH}applications/${PROJECT}/" ) # other sources
+    SET(add 1)
+  endif()
+
+  if( add EQUAL 1 ) # If the file path matched one of the criteria, add it to the list
+    SET(c_dir_list ${c_dir_list} "${file_path}\
+    ")
+    string(REPLACE ";" "" c_dir_list ${c_dir_list})
+  endif()
+
+ENDFOREACH()
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# If the app was not found, look into the root project
+
+if( app_found EQUAL 0 )
+  SET(SOURCE_PATH ${ROOT_PROJECT})
+
+  # Make a list of the .c source files that need to be linked
+  FILE(GLOB_RECURSE c_files FOLLOW_SYMLINKS ${SOURCE_PATH}*.c)
+  # Make a list of the .s source files that need to be linked
+  FILE(GLOB_RECURSE s_files FOLLOW_SYMLINKS ${SOURCE_PATH}*.s)
+  # Make a list of the .S source files that need to be linked
+  FILE(GLOB_RECURSE S_files FOLLOW_SYMLINKS ${SOURCE_PATH}*.S)
+  # Make a list of the .cpp source files that need to be linked
+  FILE(GLOB_RECURSE cpp_files FOLLOW_SYMLINKS ${SOURCE_PATH}*.cpp)
+  SET(new_list ${c_files} ${s_files} ${S_files} ${cpp_files})
+
+  SET(c_dir_list "")
+  FOREACH(file_path IN LISTS new_list)
+    SET(add 0) # This variable is set to 1 if the file_pth needs to be added to the list
+    if(${file_path} MATCHES "${ROOT_PROJECT}device/")
+      if(NOT ${file_path} MATCHES ".*/crt/.*")
+        SET(add 1)
+      endif()
+    elseif( ( ${file_path} MATCHES "${ROOT_PROJECT}applications/${PROJECT}/" ) AND ( NOT ${file_path} MATCHES "${ROOT_PROJECT}applications/${PROJECT}/.*${MAINFILE}\." ) AND ( NOT  ${file_path} MATCHES "exclude" ) )
+      SET(add 1)
+    endif()
+
+    if( add EQUAL 1 ) # If the file path matched one of the criteria, add it to the list
+      SET(c_dir_list ${c_dir_list} "${file_path}\
+      ")
+      string(REPLACE ";" "" c_dir_list ${c_dir_list})
+    endif()
+
+    ENDFOREACH()
+  endif()
+  
+LIST(REMOVE_DUPLICATES c_dir_list)
+
+
+#######################################################################
+#      DETERMINE IF APP IS EXTERNAL
+#######################################################################
+
+# Determine whether the target app is located in the root project or in an external folder
+if( ${SOURCE_PATH} STREQUAL ${ROOT_PROJECT} )
+  SET( internal_app 1 )
+  message( "${Magenta}Internal application${ColourReset}")
+else()
+  SET( internal_app 0 )
+  message( "${Magenta}External application${ColourReset}")
+endif()
+
+#######################################################################
+#      FIND CRT FILES TO BE INCLUDED
+#######################################################################
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Set the default CRT directories
+
+SET(LIB_CRT_P	  "${ROOT_PROJECT}device/lib/crt/crt0.S")
+SET(LIB_VCTR_P  "${ROOT_PROJECT}device/lib/crt/vectors.S")
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Look for external CRT files
+
+SET(CRTO "INTERNAL_CRTO")
+SET( LIB_CRT_EXT_P  "" )
+if( internal_app EQUAL 0 )
+ FILE(GLOB_RECURSE new_list FOLLOW_SYMLINKS "${SOURCE_PATH}/external/lib/crt/*.S")
+ FOREACH(file_path IN LISTS new_list)
+   if(${file_path} MATCHES "external_crt0.S")
+      SET( CRTO "EXTERNAL_CRTO" )
+      SET( LIB_CRT_EXT_P  "${file_path}" )
+      GET_FILENAME_COMPONENT(dir_path ${file_path} PATH)
+      SET(INCLUDE_FOLDERS "${INCLUDE_FOLDERS} -I ${dir_path}")
+      SET(h_dir_list_ ${h_dir_list_} "${dir_path}")
+   endif()
+ ENDFOREACH()
+endif()
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# In case of a freertos based app
+
+if(${PROJECT} MATCHES "freertos")
+  #SET(LIB_CRT_P	"${SOURCE_PATH}device/lib/crt_freertos/")
+  SET(LIB_VCTR_P	"${SOURCE_PATH}device/lib/crt/vectors_freertos.S")
+endif()
+
+
+#######################################################################
+#      SET CRT AND LINKER TYPE
+#######################################################################
+
 # Get the correct path for the crt files and linker file
 if (${LINKER} STREQUAL "on_chip")
-  SET(LIB_CRT_P "${SOURCE_PATH}device/lib/crt/")
+  #SET(LIB_CRT_P "${SOURCE_PATH}device/lib/crt/")
+  SET(CRT_TYPE "ON_CHIP")
   SET(LINK_FILE "link.ld")
 elseif(${LINKER} STREQUAL "flash_load")
-  SET(LIB_CRT_P "${SOURCE_PATH}device/lib/crt_flash_load/")
+  #SET(LIB_CRT_P "${SOURCE_PATH}device/lib/crt_flash_load/")
+  SET(CRT_TYPE "FLASH_LOAD")
   SET(LINK_FILE "link_flash_load.ld")
 elseif(${LINKER} STREQUAL "flash_exec")
-  SET(LIB_CRT_P	"${SOURCE_PATH}device/lib/crt_flash_exec/")
+  #SET(LIB_CRT_P	"${SOURCE_PATH}device/lib/crt_flash_exec/")
+  SET(CRT_TYPE "FLASH_EXEC")
   SET(LINK_FILE "link_flash_exec.ld")
 else()
   message( FATAL_ERROR "Linker specification is not correct" )
 endif()
-SET(LIB_VCTR_P	"${LIB_CRT_P}vectors.S")
 
-# Just in case it is a freertos based app
-if(${PROJECT} MATCHES "freertos")
-  #SET(LIB_CRT_P	"${SOURCE_PATH}device/lib/crt_freertos/")
-  SET(LIB_VCTR_P	"${SOURCE_PATH}device/lib/crt_freertos/vectors.S")
-endif()
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Debug messages to check the paths
 
-# messages to check the paths
+message(STATUS "[INFO] ${INCLUDE_FOLDERS}")
 message( "${Magenta}Current project: ${PROJECT}${ColourReset}")
 message( "${Magenta}Root project: ${ROOT_PROJECT}${ColourReset}")
 message( "${Magenta}Source path: ${SOURCE_PATH}${ColourReset}")
@@ -82,87 +276,25 @@ message( "${Magenta}Targetting folder: ${INC_FOLDERS}${ColourReset}")
 message( "${Magenta}Target: ${TARGET}${ColourReset}")
 
 
-# Make a list of the header files that need to be included
-FILE(GLOB_RECURSE new_list FOLLOW_SYMLINKS ${SOURCE_PATH}*.h)
-SET(dir_list_str "")
-FOREACH(file_path ${new_list})
-  SET(add 0) # This variable is set to 1 if the file_pth needs to be added to the list
-  if(${file_path} MATCHES "/device/")
-    if(${file_path} MATCHES "/target/") # Add it if its not in target, or if its in target/${TARGET}
-      if(${file_path} MATCHES ${TARGET})
-        SET(add 1)     
-      endif()
-    else()
-      SET(add 1) 
-    endif()
-  elseif(${file_path} MATCHES ${PROJECT})
-    SET(add 1) 
-  elseif( ( ${file_path} MATCHES "/freertos/" ) AND ( ${PROJECT} MATCHES "freertos" ) )
-    SET(add 1)  
-  elseif( ${file_path} MATCHES "/external/" )  
-    SET(add 1)        
-  endif()
+#######################################################################
+#      SET LINKER PROPERTIES
+#######################################################################
 
-  if( add EQUAL 1 ) # If the file path mathced one of the criterion, add it to the list
-    # Get the path of the obtained directory 
-    GET_FILENAME_COMPONENT(dir_path ${file_path} PATH)
-
-    # Add it to the string format list
-    SET(dir_list_str ${dir_list_str} "-I ${dir_path} \
-    ")  
-    string(REPLACE ";" "" dir_list_str ${dir_list_str})
-
-    # Add it to the header list
-    SET(h_dir_list_ ${h_dir_list_} "${dir_path}")
-  endif()
-
-ENDFOREACH()
-
-LIST(REMOVE_DUPLICATES dir_list_str)
-LIST(REMOVE_DUPLICATES h_dir_list_)
-
-message(STATUS "[INFO] ${dir_list_str}")
-
-# Get all the folders to include when linking
-SET(INCLUDE_FOLDERS "-I ${RISCV}/riscv32-unknown-elf/include \
-                     -I ${RISCV}/riscv32-unknown-elf/include/ \
-                     -I ${ROOT_PROJECT} \
-                     -I ${SOURCE_PATH} \
-					           ${dir_list_str}")
-
-
-# Make a list of the source files that need to be linked
-FILE(GLOB_RECURSE new_list FOLLOW_SYMLINKS ${SOURCE_PATH}*.c)
-SET(c_dir_list "")
-FOREACH(file_path IN LISTS new_list)
-  SET(add 0) # This variable is set to 1 if the file_pth needs to be added to the list
-  if(${file_path} MATCHES "/device/")
-    SET(add 1) 
-  elseif( ( ${file_path} MATCHES "/${PROJECT}/" ) AND ( NOT ${file_path} MATCHES ${MAINFILE} ) )
-    SET(add 1)       
-  elseif( ${file_path} MATCHES "/external/" ) 
-    SET(add 1)          
-  endif()
-
-  if( add EQUAL 1 ) # If the file path mathced one of the criterion, add it to the list
-    SET(c_dir_list ${c_dir_list} "${file_path}\
-    ")
-    string(REPLACE ";" "" c_dir_list ${c_dir_list})
-  endif()
-
-ENDFOREACH()
-
-LIST(REMOVE_DUPLICATES c_dir_list)
-
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Set linked files
 
 # Get all the files to include when linking
-SET(LINKED_FILES    "${LIB_CRT_P}crt0.S \
+SET(LINKED_FILES    "${LIB_CRT_P} \
                      ${LIB_VCTR_P} \
-                     ${c_dir_list}")
+                     ${LIB_CRT_EXT_P} \
+                     ${c_dir_list}") 
 
 message( "${Magenta}Linked files: ${LINKED_FILES}${ColourReset}")
-					 
-# fetch content from freertos kernel repository			 
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Free-RTOS configurations
+
+# fetch content from freertos kernel repository
 FetchContent_Declare( freertos_kernel
   GIT_REPOSITORY https://github.com/FreeRTOS/FreeRTOS-Kernel.git
   GIT_TAG        99d3d54ac4d17474a81c94ec5bab36f55f470359 #V10.5.1, last commit 16/12/2022
@@ -188,20 +320,38 @@ if(${PROJECT} MATCHES "freertos")
   FetchContent_MakeAvailable(freertos_kernel)
 endif()
 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Set CMAKE flags
+
 # specify the C standard
-set(COMPILER_LINKER_FLAGS "\
-  -march=${CMAKE_SYSTEM_PROCESSOR} \
-  -w -Os -g  -nostdlib  \
-  -DHOST_BUILD \
-  -DportasmHANDLE_INTERRUPT=vSystemIrqHandler\
-")
+if(NOT ${PROJECT} MATCHES "coremark")
+  set(COMPILER_LINKER_FLAGS "\
+    -march=${CMAKE_SYSTEM_PROCESSOR} \
+    -w -O2 -g  -nostdlib  \
+    -ffunction-sections \
+    -DHOST_BUILD \
+    -D${CRT_TYPE} \
+    -D${CRTO} \
+    -DportasmHANDLE_INTERRUPT=vSystemIrqHandler\
+  ")
+else()
+  set(COMPILER_LINKER_FLAGS "\
+    -march=${CMAKE_SYSTEM_PROCESSOR} \
+    -w -O3 -g  -nostdlib -falign-functions=16 -funroll-all-loops -falign-jumps=4 -finline-functions -Wall -static -pedantic -DPERFORMANCE_RUN=1 -DITERATIONS=1 -DHAS_STDIO=1 -DHAS_PRINTF=1 \
+    -ffunction-sections \
+    -DHOST_BUILD \
+    -D${CRT_TYPE} \
+    -D${CRTO} \
+    -DportasmHANDLE_INTERRUPT=vSystemIrqHandler\
+  ")
+endif()
 set(CMAKE_C_FLAGS ${COMPILER_LINKER_FLAGS})
+set(CMAKE_CXX_FLAGS ${COMPILER_LINKER_FLAGS})
 
 if (${COMPILER} MATCHES "clang")
      set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} --target=riscv32 \
-                                          -mabi=ilp32 \
                                           --gcc-toolchain=${RISCV} \
-                                          --sysroot=${RISCV}/riscv32-unknown-elf \
+                                          --sysroot=${RISCV}/${COMPILER_PREFIX}elf \
                                           -static \
                                           -mcmodel=medany \
                                           -fvisibility=hidden \
@@ -215,10 +365,24 @@ endif()
 #add_subdirectory(device/lib/drivers)
 #add_subdirectory(device/lib/runtime)
 
-set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.c)
+#######################################################################
+#      SET TARGETS
+#######################################################################
+if (${COMPILER} MATCHES "gcc")
+  set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.c)
+  if(NOT EXISTS ${SOURCES})
+    # If main.c does not exist, set the source file to main.cpp
+    set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.cpp)
+    message("${Red}cpp SOURCES set")
+  endif()
+elseif(${COMPILER} MATCHES "clang")
+  set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.c)
+elseif(${COMPILER} MATCHES "g\\+\\+.*$")
+  set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.cpp)
+endif()
 
 # add the executable
-add_executable(${MAINFILE}.elf ${SOURCES})  
+add_executable(${MAINFILE}.elf ${SOURCES})
 
 # add include directories to compilation
 target_include_directories(${MAINFILE}.elf PUBLIC ${h_dir_list_})
@@ -235,7 +399,7 @@ endif()
 SET(LINKER_SCRIPT "${LINK_FOLDER}/${LINK_FILE}")
 message( "${Magenta}Linker file: ${LINKER_SCRIPT}${ColourReset}")
 
-# Setting-up the properties, elf is 
+# Setting-up the properties, elf is
 set_target_properties(${MAINFILE}.elf PROPERTIES LINK_DEPENDS "${LINKER_SCRIPT}")
 
 # Linker control
@@ -243,14 +407,15 @@ SET(CMAKE_EXE_LINKER_FLAGS  "-T ${LINKER_SCRIPT}  \
                             ${INCLUDE_FOLDERS} \
                              -static ${LINKED_FILES} \
                              -Wl,-Map=${MAINFILE}.map \
-                             -L ${RISCV}/riscv32-unknown-elf/lib \
+                             -L ${RISCV}/${COMPILER_PREFIX}elf/lib \
                              -lc -lm -lgcc -flto \
+                             -fpermissive -fno-rtti -fno-exceptions -fno-threadsafe-statics \
                             -ffunction-sections -fdata-sections -specs=nano.specs")
-message( "${Magenta}Lib Folder RISCV-GCC: ${RISCV}/riscv32-unknown-elf/lib${ColourReset}")
+message( "${Magenta}Lib Folder RISCV-GCC: ${RISCV}/${COMPILER_PREFIX}elf/lib${ColourReset}")
 
 SET(CMAKE_VERBOSE_MAKEFILE on)
 
-# To make sure that .obj files are created and fetched from the same path. 
+# To make sure that .obj files are created and fetched from the same path.
 # When setting an inner path to add_executable, .obj files are stored in ${MAINFILE}.elf.dir/<relative path>
 # but when an outside directory is provided, they are stored in ${MAINFILE}.elf.dir/<absolute path>.
 # To prevent this, if the SOURCE_PATH is the ROOT_PROJECT (X-HEEP source files will be used), no further path is to be added to the fetch directory.
@@ -262,24 +427,36 @@ endif()
 
 # Specify that we want to link with GCC even if we are compiling with clang
 if (${COMPILER} MATCHES "clang")
+	if( ${PROJECT} MATCHES "freertos" )
+		set( CMAKE_C_LINK_EXECUTABLE "${CMAKE_LINKER} ${COMPILER_LINKER_FLAGS} ${CMAKE_EXE_LINKER_FLAGS} \
+                                ${SOURCE_PATH}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${MAINFILE}.c.obj \
+                                -o ${MAINFILE}.elf \
+								_deps/freertos_kernel-build/libfreertos_kernel.a \ _deps/freertos_kernel-build/portable/libfreertos_kernel_port.a \ _deps/freertos_kernel-build/libfreertos_kernel.a \ _deps/freertos_kernel-build/portable/libfreertos_kernel_port.a \
+								")
+	else()
   set( CMAKE_C_LINK_EXECUTABLE "${CMAKE_LINKER} ${COMPILER_LINKER_FLAGS} ${CMAKE_EXE_LINKER_FLAGS} \
                                 ${SOURCE_PATH}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${MAINFILE}.c.obj \
                                 -o ${MAINFILE}.elf")
+    endif()
 endif()
 
-# Post processing command to create a disassembly file 
+#######################################################################
+#      SET CUSTOM COMMANDS
+#######################################################################
+
+# Post processing command to create a disassembly file
 add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
-        COMMAND ${CMAKE_OBJDUMP} -S  ${MAINFILE}.elf > ${MAINFILE}.disasm
+        COMMAND ${CMAKE_OBJDUMP} -S  ${MAINFILE}.elf > ${MAINFILE}.S
         COMMENT "Invoking: Disassemble")
 
-# Post processing command to create a hex file 
+# Post processing command to create a hex file
 if((${LINKER} STREQUAL "flash_load") OR (${LINKER} STREQUAL "flash_exec"))
     add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
-            COMMAND ${CMAKE_OBJCOPY} -O verilog --adjust-vma=-0x40000000 ${MAINFILE}.elf  ${MAINFILE}.hex 
+            COMMAND ${CMAKE_OBJCOPY} -O verilog --adjust-vma=-0x40000000 ${MAINFILE}.elf  ${MAINFILE}.hex
             COMMENT "Invoking: Hexdump")
 else()
     add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
-            COMMAND ${CMAKE_OBJCOPY} -O verilog  ${MAINFILE}.elf  ${MAINFILE}.hex 
+            COMMAND ${CMAKE_OBJCOPY} -O verilog  ${MAINFILE}.elf  ${MAINFILE}.hex
             COMMENT "Invoking: Hexdump")
 endif()
 
@@ -288,11 +465,37 @@ add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
         COMMENT "Invoking: Hexdump")
 
 # Pre-processing command to create disassembly for each source file
-foreach (SRC_MODULE ${MAINFILE} )
-  add_custom_command(TARGET ${MAINFILE}.elf 
+if ((${COMPILER} MATCHES "gcc") OR (${COMPILER} MATCHES "clang"))
+  if(EXISTS ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.c)
+   foreach (SRC_MODULE ${MAINFILE} )
+    add_custom_command(TARGET ${MAINFILE}.elf
+                       PRE_LINK
+                       COMMAND ${CMAKE_OBJDUMP} -S ${ROOT_PROJECT}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.c.obj > ${SRC_MODULE}.s
+                       COMMENT "Invoking: GCC C Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.c.obj)")   
+   endforeach()
+  else() #main.cpp targets
+  foreach (SRC_MODULE ${MAINFILE} )
+    add_custom_command(TARGET ${MAINFILE}.elf
+                       PRE_LINK
+                      COMMAND ${CMAKE_OBJDUMP} -S ${ROOT_PROJECT}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
+                      COMMENT "Invoking:  GCC CPP Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.cpp.obj)")
+    endforeach()
+  endif()
+elseif(${COMPILER} MATCHES "g\\+\\+.*$")
+  foreach (SRC_MODULE ${MAINFILE} )
+  add_custom_command(TARGET ${MAINFILE}.elf
                      PRE_LINK
-                     COMMAND ${CMAKE_OBJDUMP} -S ${SOURCE_PATH}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.c.obj > ${SRC_MODULE}.s
-                     COMMENT "Invoking: Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.c.obj)")
-endforeach()
+                    COMMAND ${CMAKE_OBJDUMP} -S ${ROOT_PROJECT}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
+                    COMMENT "Invoking: G++ Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.cpp.obj)")
+  endforeach()
+endif()
+
+
+# Adding gdb command - TBD
+#add_custom_target(gdb DEPENDS ${MAINFILE}.elf)
+#add_custom_command(TARGET gdb
+#    COMMAND ${CMAKE_C_GDB} ${MAINFILE}.elf -x gdbInit &)
 
 SET(DCMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+#message( FATAL_ERROR "You can not do this at all, CMake will exit." )

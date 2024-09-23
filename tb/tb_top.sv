@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 
 module tb_top #(
-    parameter JTAG_DPI   = 0
+    parameter JTAG_DPI = 0
 );
 
   // comment to record execution trace

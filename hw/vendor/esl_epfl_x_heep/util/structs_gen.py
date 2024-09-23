@@ -1,4 +1,5 @@
 import hjson
+from  math import ceil
 import string
 import argparse
 import sys
@@ -258,6 +259,9 @@ def add_registers(peripheral_json):
     reg_struct = "\n"
     reg_enum = ""
 
+    # number of "reserved" fields. Used to name them with a progressive ID
+    num_of_reserved = 0 
+
     # Keeps track of the offset in Bytes from the base address of the peripheral.
     # It is usefult to compute how many Bytes to reserve in case a "skipto"
     # keywork is encountered
@@ -294,7 +298,7 @@ def add_registers(peripheral_json):
                 n_bits += count_bits(f["bits"])
 
             # computes the number of registers needed to pack all the bit fields needed
-            n_multireg = int((count * n_bits) /  int(peripheral_json["regwidth"]))
+            n_multireg = ceil((count * n_bits) /  int(peripheral_json["regwidth"]))
             
             # generate the multiregisters
             for r in range(n_multireg):
@@ -336,10 +340,11 @@ def add_registers(peripheral_json):
 
             offset_value = int((new_address - bytes_offset) / 4)
             
-            line = tab_spaces + "uint32_t _reserved[{}];".format(int(offset_value))
+            line = tab_spaces + "uint32_t _reserved_{}[{}];".format(num_of_reserved, int(offset_value))
             reg_comment = line_comment_start + "reserved addresses" + line_comment_end + "\n\n"
             reg_struct += line.ljust(comment_align_space) + reg_comment
             bytes_offset += offset_value * 4
+            num_of_reserved += 1
 
 
             ## OLD VERSION WITH UNION AND BIT FIELDS ##

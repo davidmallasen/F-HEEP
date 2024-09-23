@@ -130,8 +130,6 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
 
   // eXtension interface
   if_xif.cpu_commit    xif_commit_if,
-  if_xif.cpu_mem       xif_mem_if,
-
   input                xif_csr_error_i
 );
 
@@ -316,8 +314,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   // Detect mret pointers in ID
   assign mret_ptr_in_id = if_id_pipe_i.instr_valid && if_id_pipe_i.instr_meta.mret_ptr;
 
-  // Note: RVFI does not use jump_taken_id (which is not in itself an issue); An assertion in id_stage_sva checks that the jump target remains stable;
-  // todo: Do we need a similar stability check for branches?
+  // Note: RVFI does not use jump_taken_id (which is not in itself an issue). An assertion in id_stage_sva checks that the jump target remains stable.
 
   // EX stage
   // Branch taken for valid branch instructions in EX with valid decision
@@ -425,8 +422,6 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   // will not propagate to the EX stage. For cycles after lsu_err_wb_i[0] is
   // high, ID stage will be halted due to pending_nmi and !nmi_allowed.
   assign pending_nmi_early =  lsu_err_wb_i[0];
-
-  // todo: Halting ID and killing it later will not work for Zce (push/pop)
 
   // dcsr.nmip will always see a pending nmi if nmi_pending_q is set.
   // This CSR bit shall not be gated by debug mode or step without stepie
@@ -555,7 +550,6 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   // LSU instructions which were suppressed due to previous exceptions or trigger match
   // will be interruptable as they were converted to NOP in ID stage.
   // When a fencei is present in WB and the LSU has completed all tranfers, the fencei handshake will be initiated. This must complete and the fencei instruction must retire before allowing interrupts.
-  // TODO:OK:low May allow interuption of Zce to idempotent memories
   // Any multi operation instruction (table jumps, push/pop and double moves) may not be interrupted once the first operation has completed its operation in WB.
   //   - This is guarded with using the sequence_interruptible, which tracks sequence progress through the WB stage.
   // When a CLIC pointer is in the pipeline stages EX or WB, we must block interrupts.
@@ -639,18 +633,27 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
     // to avoid more than one instructions passing down the pipe.
     ctrl_fsm_o.halt_if          = single_step_halt_if_q;
 
-    // ID stage is halted for regular stalls (i.e. stalls for which the instruction
-    // currently in ID is not ready to be issued yet). Also halted if interrupt or debug pending
-    // but not allowed to be taken. This is to create an interruptible bubble in WB.
-    // Interrupts: Machine mode: Prevent issuing new instructions until we get an interruptible bubble.
-    //             Debug mode:   Interrupts are not allowed during debug. Cannot halt ID stage in such a case
-    //                           since the dret that brings the core out of debug mode may never get past a halted ID stage.
-    //             Sequences:    If we need to halt for debug or interrupt not allowed due to a sequence, we must check if we can
-    //                           actually halt the ID stage or not. Halting the same sequence that causes *_allowed to go to 0
-    //                           may cause a deadlock.
-    ctrl_fsm_o.halt_id          = ctrl_byp_i.jalr_stall || ctrl_byp_i.load_stall || ctrl_byp_i.csr_stall || ctrl_byp_i.wfi_wfe_stall || ctrl_byp_i.mnxti_id_stall ||
-      (((pending_interrupt && !interrupt_allowed) || (pending_nmi && !nmi_allowed) || (pending_nmi_early)) && debug_interruptible && id_stage_haltable) ||
-      (((pending_async_debug && !async_debug_allowed) ||(pending_sync_debug && !sync_debug_allowed)) && id_stage_haltable);
+    // ID stage is halted when hazards are present (i.e. stalls for which the instruction currently in ID is not ready to be issued yet).
+    //
+    // In addition the ID stage may be halted to enable interrupts or debug to be taken.
+    //   - If an interrupt (including NMI) is present it is not guaranteed that the pipeline
+    //     can take the interrupt immediately. A LSU instruction could for instance be outstanding, causing the interrupt not to be taken.
+    //     The controller uses (pending_interrupt && interrupt_allowed) to check for these conditions.
+    //     When an interrupt (or NMI) is pending, the ID stage is halted to guarantee that an interruptible bubble eventually will
+    //     occur in the WB stage.
+    //   -- The ID stage is only halted iff debug_interruptible==1, indicating that we are not in debug mode or single step mode with interrupts disabled.
+    //   --- If halting for interrupts while in debug mode (debug_interruptible == 0), the core would deadlock waiting for interrupt_allowed, but the core
+    //       would never exit debug mode because the dret instruction could be blocked by the halted ID stage.
+    //   -- The ID stage is only halted iff also the ID stage is haltable (meaning ID stage is not currently in the middle of a sequence or waiting for a CLIC pointer)
+    //
+    //   - The ID stage is halted when any async or sync debug is pending for the same reasons as for interrupts.
+    //
+    //   - If not checking for id_stage_haltable for interrupts and debug, the core could end up in a situation where it tries to create a bubble
+    //     by halting ID, but the condition disallowing interrupt or debug will not disappear until the sequence currently handled by the ID stage
+    //     is done. This would create an unrecoverable deadlock.
+    ctrl_fsm_o.halt_id          = (ctrl_byp_i.jalr_stall || ctrl_byp_i.load_stall || ctrl_byp_i.csr_stall || ctrl_byp_i.wfi_wfe_stall || ctrl_byp_i.mnxti_id_stall) ||
+                                  ((pending_interrupt || pending_nmi || pending_nmi_early) && debug_interruptible && id_stage_haltable)                             ||
+                                  ((pending_async_debug || pending_sync_debug) && id_stage_haltable);
 
 
     // Halting EX if minstret_stall occurs. Otherwise we would read the wrong minstret value
@@ -1026,7 +1029,6 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
               branch_taken_n = 1'b1;
             end
           end else if (clic_ptr_in_id || mret_ptr_in_id) begin
-            // todo e40s: Factor in integrity related errors
             if (!(if_id_pipe_i.instr.bus_resp.err || (if_id_pipe_i.instr.mpu_status != MPU_OK) || (if_id_pipe_i.instr.align_status != ALIGN_OK))) begin
               if (!branch_taken_q) begin
                 ctrl_fsm_o.pc_set = 1'b1;
@@ -1046,28 +1048,27 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
           end
 
           // Regular mret in WB restores CSR regs
-          // todo: add !ctrl_fsm_o.halt_wb below (should be SEC clean)
-          if (mret_in_wb && !ctrl_fsm_o.kill_wb) begin
+          if (mret_in_wb && !ctrl_fsm_o.kill_wb && !ctrl_fsm_o.halt_wb) begin
             ctrl_fsm_o.csr_restore_mret  = !debug_mode_q;
           end
 
           // For mret that caused a CLIC pointer fetch, CSR updates will happen once the pointer reaches WB.
           // If the pointer has associated exceptions, the csr_restore_mret_ptr will not happen
-          if (mret_ptr_in_wb && !ctrl_fsm_o.kill_wb && !exception_in_wb) begin
+          if (mret_ptr_in_wb && !ctrl_fsm_o.kill_wb && !ctrl_fsm_o.halt_wb && !exception_in_wb) begin
             ctrl_fsm_o.csr_restore_mret_ptr  = !debug_mode_q;
           end
 
           // CLIC pointer in WB
-          if(clic_ptr_in_wb && !ctrl_fsm_o.kill_wb && !exception_in_wb) begin
+          if (clic_ptr_in_wb && !ctrl_fsm_o.kill_wb && !ctrl_fsm_o.halt_wb && !exception_in_wb) begin
             // Clear minhv if no exceptions are associated with the pointer
             ctrl_fsm_o.csr_clear_minhv = 1'b1;
           end
         end // !debug or interrupts
 
         // Single step debug entry or etrigger debug entry
-          // Need to be after (in parallell with) exception/interrupt handling
-          // to ensure mepc and if_pc are set correctly for use in dpc,
-          // and to ensure only one instruction can retire during single step
+        // Need to be after (in parallell with) exception/interrupt handling
+        // to ensure mepc and if_pc are set correctly for use in dpc,
+        // and to ensure only one instruction can retire during single step
         // Triggers other than exception trigger do not cause any state change before debug entry.
         // Exception triggers do all the side effects off taking an exception (mcause, mepc etc) but without
         // executing the first handler instruction before debug entry. If an exception trigger factored into
@@ -1494,7 +1495,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
           commit_valid_q <= 1'b0;
           commit_kill_q  <= 1'b0;
         end else begin
-          if ((ex_valid_i && wb_ready_i) || ctrl_fsm_o.kill_ex || (xif_mem_if.mem_valid && xif_mem_if.mem_ready)) begin
+          if ((ex_valid_i && wb_ready_i) || ctrl_fsm_o.kill_ex) begin
             commit_valid_q <= 1'b0;
             commit_kill_q  <= 1'b0;
           end else begin

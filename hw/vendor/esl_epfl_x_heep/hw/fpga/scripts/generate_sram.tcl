@@ -1,5 +1,5 @@
 
-set ipName xilinx_mem_gen_0
+set ipName xilinx_mem_gen_8192
 
 create_ip -name blk_mem_gen -vendor xilinx.com -library ip -version 8.4 -module_name $ipName
 
@@ -23,5 +23,9 @@ set_property -dict [list CONFIG.Enable_32bit_Address {false} \
 #export_ip_user_files -of_objects [get_ips $ipName] -no_script -sync -force -quiet
 
 create_ip_run [get_ips $ipName]
-launch_run -jobs 8 ${ipName}_synth_1
-wait_on_run ${ipName}_synth_1
+
+
+
+launch_runs -jobs 8  xilinx_mem_gen_8192_synth_1
+
+wait_on_run xilinx_mem_gen_8192_synth_1
