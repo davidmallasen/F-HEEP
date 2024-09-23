@@ -37,7 +37,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
   parameter b_ext_e      B_EXT                  = B_NONE,
   parameter m_ext_e      M_EXT                  = M,
   parameter bit          X_EXT                  = 0,
-  parameter              DEBUG_TRIGGER_EN       = 1,
   parameter int unsigned REGFILE_NUM_READ_PORTS = 2,
   parameter bit          CLIC                   = 1
 )
@@ -99,7 +98,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
 
   // eXtension interface
   if_xif.cpu_issue    xif_issue_if,
-  if_xif.cpu_mem      xif_mem_if,
   output logic        xif_offloading_o
 );
 
@@ -423,7 +421,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
     .A_EXT                           ( A_EXT                     ),
     .B_EXT                           ( B_EXT                     ),
     .M_EXT                           ( M_EXT                     ),
-    .DEBUG_TRIGGER_EN                ( DEBUG_TRIGGER_EN          ),
     .CLIC                            ( CLIC                      )
   )
   decoder_i
@@ -684,10 +681,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
 
       end else if (ex_ready_i) begin
         id_ex_pipe_o.instr_valid            <= 1'b0;
-        id_ex_pipe_o.xif_en                 <= 1'b0;
-      end else if (xif_mem_if.mem_valid && xif_mem_if.mem_ready) begin
-        id_ex_pipe_o.instr_valid            <= 1'b0;
-        id_ex_pipe_o.xif_en                 <= 1'b0;
       end
     end
   end
@@ -756,7 +749,9 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
       // Also attempt to offload any CSR instruction. The validity of such instructions are only
       // checked in the EX stage.
       // Instructions with deassert_we set to 1 from the controller bypass logic will not be attempted offloaded.
-      assign xif_issue_if.issue_valid     = instr_valid && (illegal_insn || csr_en) &&
+      // Only offload instructions if the EX stage is ready not to miss data from xif_issue.issue_resp
+      assign xif_issue_if.issue_valid     = instr_valid && ex_ready_i &&
+                                            (illegal_insn || csr_en) &&
                                             !(xif_accepted_q || xif_rejected_q || ctrl_byp_i.deassert_we);
 
       // Keep xif_offloading_o high after an offloaded instruction was accepted or rejected to get

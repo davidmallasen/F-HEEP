@@ -31,17 +31,19 @@
 module cv32e40p_core
   import cv32e40p_apu_core_pkg::*;
 #(
-    parameter PULP_XPULP          =  0,                   // PULP ISA Extension (incl. custom CSRs and hardware loop, excl. p.elw)
-    parameter PULP_CLUSTER = 0,  // PULP Cluster interface (incl. p.elw)
+    parameter COREV_PULP =  0,  // PULP ISA Extension (incl. custom CSRs and hardware loop, excl. cv.elw)
+    parameter COREV_CLUSTER = 0,  // PULP Cluster interface (incl. cv.elw)
     parameter FPU = 0,  // Floating Point Unit (interfaced via APU interface)
-    parameter PULP_ZFINX = 0,  // Float-in-General Purpose registers
+    parameter FPU_ADDMUL_LAT = 0,  // Floating-Point ADDition/MULtiplication lane pipeline registers number
+    parameter FPU_OTHERS_LAT = 0,  // Floating-Point COMParison/CONVersion lanes pipeline registers number
+    parameter ZFINX = 0,  // Float-in-General Purpose registers
     parameter NUM_MHPMCOUNTERS = 1
 ) (
     // Clock and Reset
     input logic clk_i,
     input logic rst_ni,
 
-    input logic pulp_clock_en_i,  // PULP clock enable (only used if PULP_CLUSTER = 1)
+    input logic pulp_clock_en_i,  // PULP clock enable (only used if COREV_CLUSTER = 1)
     input logic scan_cg_en_i,  // Enable all clock gates for testing
 
     // Core ID, Cluster ID, debug mode halt address and boot address are considered more or less static
@@ -68,7 +70,8 @@ module cv32e40p_core
     output logic [31:0] data_wdata_o,
     input  logic [31:0] data_rdata_i,
 
-    // apu-interconnect
+    // CVFPU interface
+    output logic                              apu_busy_o,
     // handshake signals
     output logic                              apu_req_o,
     input  logic                              apu_gnt_i,
@@ -121,9 +124,7 @@ module cv32e40p_core
   logic       sec_lvl_o;
 
   localparam N_HWLP = 2;
-  localparam N_HWLP_BITS = $clog2(N_HWLP);
   localparam APU = (FPU == 1) ? 1 : 0;
-
 
   // IF/ID signals
   logic        instr_valid_id;
@@ -158,13 +159,13 @@ module cv32e40p_core
   logic [31:0] jump_target_id, jump_target_ex;
   logic               branch_in_ex;
   logic               branch_decision;
+  logic        [ 1:0] ctrl_transfer_insn_in_dec;
 
   logic               ctrl_busy;
   logic               if_busy;
   logic               lsu_busy;
-  logic               apu_busy;
 
-  logic        [31:0] pc_ex;  // PC of last executed branch or p.elw
+  logic        [31:0] pc_ex;  // PC of last executed branch or cv.elw
 
   // ALU Control
   logic               alu_en_ex;
@@ -197,9 +198,11 @@ module cv32e40p_core
   logic                                     mult_clpx_img_ex;
 
   // FPU
+  logic                                     fs_off;
   logic        [            C_RM-1:0]       frm_csr;
   logic        [         C_FFLAG-1:0]       fflags_csr;
   logic                                     fflags_we;
+  logic                                     fregs_we;
 
   // APU
   logic                                     apu_en_ex;
@@ -212,6 +215,7 @@ module cv32e40p_core
   logic        [                 2:0][ 5:0] apu_read_regs;
   logic        [                 2:0]       apu_read_regs_valid;
   logic                                     apu_read_dep;
+  logic                                     apu_read_dep_for_jalr;
   logic        [                 1:0][ 5:0] apu_write_regs;
   logic        [                 1:0]       apu_write_regs_valid;
   logic                                     apu_write_dep;
@@ -226,6 +230,7 @@ module cv32e40p_core
   logic                                     regfile_we_ex;
   logic        [                 5:0]       regfile_waddr_fw_wb_o;  // From WB to ID
   logic                                     regfile_we_wb;
+  logic                                     regfile_we_wb_power;
   logic        [                31:0]       regfile_wdata;
 
   logic        [                 5:0]       regfile_alu_waddr_ex;
@@ -233,6 +238,7 @@ module cv32e40p_core
 
   logic        [                 5:0]       regfile_alu_waddr_fw;
   logic                                     regfile_alu_we_fw;
+  logic                                     regfile_alu_we_fw_power;
   logic        [                31:0]       regfile_alu_wdata_fw;
 
   // CSR control
@@ -259,8 +265,8 @@ module cv32e40p_core
   logic               data_load_event_ex;
   logic               data_misaligned_ex;
 
-  logic               p_elw_start;  // Start of p.elw load (when data_req_o is sent)
-  logic               p_elw_finish;  // Finish of p.elw load (when data_rvalid_i is received)
+  logic               p_elw_start;  // Start of cv.elw load (when data_req_o is sent)
+  logic               p_elw_finish;  // Finish of cv.elw load (when data_rvalid_i is received)
 
   logic        [31:0] lsu_rdata;
 
@@ -319,11 +325,6 @@ module cv32e40p_core
   logic [             31:0]       hwlp_target;
   logic                           hwlp_jump;
 
-  // used to write from CS registers to hardware loop registers
-  logic [  N_HWLP_BITS-1:0]       csr_hwlp_regid;
-  logic [              2:0]       csr_hwlp_we;
-  logic [             31:0]       csr_hwlp_data;
-
   // Performance Counters
   logic                           mhpmevent_minstret;
   logic                           mhpmevent_load;
@@ -365,7 +366,6 @@ module cv32e40p_core
 
   // APU master signals
   assign apu_flags_o = apu_flags_ex;
-  assign fflags_csr = apu_flags_i;
 
   //////////////////////////////////////////////////////////////////////////////////////////////
   //   ____ _            _      __  __                                                   _    //
@@ -380,7 +380,7 @@ module cv32e40p_core
   logic fetch_enable;
 
   cv32e40p_sleep_unit #(
-      .PULP_CLUSTER(PULP_CLUSTER)
+      .COREV_CLUSTER(COREV_CLUSTER)
   ) sleep_unit_i (
       // Clock, reset interface
       .clk_ungated_i(clk_i),  // Ungated clock
@@ -399,7 +399,7 @@ module cv32e40p_core
       .if_busy_i  (if_busy),
       .ctrl_busy_i(ctrl_busy),
       .lsu_busy_i (lsu_busy),
-      .apu_busy_i (apu_busy),
+      .apu_busy_i (apu_busy_o),
 
       // PULP cluster
       .pulp_clock_en_i       (pulp_clock_en_i),
@@ -421,10 +421,11 @@ module cv32e40p_core
   //                                              //
   //////////////////////////////////////////////////
   cv32e40p_if_stage #(
-      .PULP_XPULP (PULP_XPULP),
+      .COREV_PULP (COREV_PULP),
       .PULP_OBI   (PULP_OBI),
       .PULP_SECURE(PULP_SECURE),
-      .FPU        (FPU)
+      .FPU        (FPU),
+      .ZFINX      (ZFINX)
   ) if_stage_i (
       .clk  (clk),
       .rst_n(rst_ni),
@@ -509,15 +510,17 @@ module cv32e40p_core
   //                                             //
   /////////////////////////////////////////////////
   cv32e40p_id_stage #(
-      .PULP_XPULP      (PULP_XPULP),
-      .PULP_CLUSTER    (PULP_CLUSTER),
+      .COREV_PULP      (COREV_PULP),
+      .COREV_CLUSTER   (COREV_CLUSTER),
       .N_HWLP          (N_HWLP),
       .PULP_SECURE     (PULP_SECURE),
       .USE_PMP         (USE_PMP),
       .A_EXTENSION     (A_EXTENSION),
       .APU             (APU),
       .FPU             (FPU),
-      .PULP_ZFINX      (PULP_ZFINX),
+      .FPU_ADDMUL_LAT  (FPU_ADDMUL_LAT),
+      .FPU_OTHERS_LAT  (FPU_OTHERS_LAT),
+      .ZFINX           (ZFINX),
       .APU_NARGS_CPU   (APU_NARGS_CPU),
       .APU_WOP_CPU     (APU_WOP_CPU),
       .APU_NDSFLAGS_CPU(APU_NDSFLAGS_CPU),
@@ -541,9 +544,10 @@ module cv32e40p_core
       .instr_req_o  (instr_req_int),
 
       // Jumps and branches
-      .branch_in_ex_o   (branch_in_ex),
-      .branch_decision_i(branch_decision),
-      .jump_target_o    (jump_target_id),
+      .branch_in_ex_o             (branch_in_ex),
+      .branch_decision_i          (branch_decision),
+      .jump_target_o              (jump_target_id),
+      .ctrl_transfer_insn_in_dec_o(ctrl_transfer_insn_in_dec),
 
       // IF and ID control signals
       .clear_instr_valid_o(clear_instr_valid),
@@ -611,7 +615,8 @@ module cv32e40p_core
       .mult_clpx_img_ex_o  (mult_clpx_img_ex),  // from ID to EX stage
 
       // FPU
-      .frm_i(frm_csr),
+      .fs_off_i(fs_off),
+      .frm_i   (frm_csr),
 
       // APU
       .apu_en_ex_o      (apu_en_ex),
@@ -621,14 +626,15 @@ module cv32e40p_core
       .apu_flags_ex_o   (apu_flags_ex),
       .apu_waddr_ex_o   (apu_waddr_ex),
 
-      .apu_read_regs_o       (apu_read_regs),
-      .apu_read_regs_valid_o (apu_read_regs_valid),
-      .apu_read_dep_i        (apu_read_dep),
-      .apu_write_regs_o      (apu_write_regs),
-      .apu_write_regs_valid_o(apu_write_regs_valid),
-      .apu_write_dep_i       (apu_write_dep),
-      .apu_perf_dep_o        (perf_apu_dep),
-      .apu_busy_i            (apu_busy),
+      .apu_read_regs_o        (apu_read_regs),
+      .apu_read_regs_valid_o  (apu_read_regs_valid),
+      .apu_read_dep_i         (apu_read_dep),
+      .apu_read_dep_for_jalr_i(apu_read_dep_for_jalr),
+      .apu_write_regs_o       (apu_write_regs),
+      .apu_write_regs_valid_o (apu_write_regs_valid),
+      .apu_write_dep_i        (apu_write_dep),
+      .apu_perf_dep_o         (perf_apu_dep),
+      .apu_busy_i             (apu_busy_o),
 
       // CSR ID/EX
       .csr_access_ex_o      (csr_access_ex),
@@ -653,11 +659,6 @@ module cv32e40p_core
 
       .hwlp_jump_o  (hwlp_jump),
       .hwlp_target_o(hwlp_target),
-
-      // hardware loop signals from CSR
-      .csr_hwlp_regid_i(csr_hwlp_regid),
-      .csr_hwlp_we_i   (csr_hwlp_we),
-      .csr_hwlp_data_i (csr_hwlp_data),
 
       // LSU
       .data_req_ex_o       (data_req_ex),  // to load store unit
@@ -703,13 +704,15 @@ module cv32e40p_core
       .wake_from_sleep_o(wake_from_sleep),
 
       // Forward Signals
-      .regfile_waddr_wb_i(regfile_waddr_fw_wb_o),  // Write address ex-wb pipeline
-      .regfile_we_wb_i   (regfile_we_wb),  // write enable for the register file
-      .regfile_wdata_wb_i(regfile_wdata),  // write data to commit in the register file
+      .regfile_waddr_wb_i   (regfile_waddr_fw_wb_o),  // Write address ex-wb pipeline
+      .regfile_we_wb_i      (regfile_we_wb),  // write enable for the register file
+      .regfile_we_wb_power_i(regfile_we_wb_power),
+      .regfile_wdata_wb_i   (regfile_wdata),  // write data to commit in the register file
 
-      .regfile_alu_waddr_fw_i(regfile_alu_waddr_fw),
-      .regfile_alu_we_fw_i   (regfile_alu_we_fw),
-      .regfile_alu_wdata_fw_i(regfile_alu_wdata_fw),
+      .regfile_alu_waddr_fw_i   (regfile_alu_waddr_fw),
+      .regfile_alu_we_fw_i      (regfile_alu_we_fw),
+      .regfile_alu_we_fw_power_i(regfile_alu_we_fw_power),
+      .regfile_alu_wdata_fw_i   (regfile_alu_wdata_fw),
 
       // from ALU
       .mult_multicycle_i(mult_multicycle),
@@ -741,6 +744,7 @@ module cv32e40p_core
   //                                                 //
   /////////////////////////////////////////////////////
   cv32e40p_ex_stage #(
+      .COREV_PULP      (COREV_PULP),
       .FPU             (FPU),
       .APU_NARGS_CPU   (APU_NARGS_CPU),
       .APU_WOP_CPU     (APU_WOP_CPU),
@@ -784,8 +788,16 @@ module cv32e40p_core
 
       .mult_multicycle_o(mult_multicycle),  // to ID/EX pipe registers
 
+      .data_req_i          (data_req_o),  // from ID/EX pipeline
+      .data_rvalid_i       (data_rvalid_i),  // from ID/EX pipeline
+      .data_misaligned_ex_i(data_misaligned_ex),  // from ID/EX pipeline
+      .data_misaligned_i   (data_misaligned),
+
+      .ctrl_transfer_insn_in_dec_i(ctrl_transfer_insn_in_dec),
+
       // FPU
       .fpu_fflags_we_o(fflags_we),
+      .fpu_fflags_o   (fflags_csr),
 
       // APU
       .apu_en_i      (apu_en_ex),
@@ -793,22 +805,22 @@ module cv32e40p_core
       .apu_lat_i     (apu_lat_ex),
       .apu_operands_i(apu_operands_ex),
       .apu_waddr_i   (apu_waddr_ex),
-      .apu_flags_i   (apu_flags_ex),
 
-      .apu_read_regs_i       (apu_read_regs),
-      .apu_read_regs_valid_i (apu_read_regs_valid),
-      .apu_read_dep_o        (apu_read_dep),
-      .apu_write_regs_i      (apu_write_regs),
-      .apu_write_regs_valid_i(apu_write_regs_valid),
-      .apu_write_dep_o       (apu_write_dep),
+      .apu_read_regs_i        (apu_read_regs),
+      .apu_read_regs_valid_i  (apu_read_regs_valid),
+      .apu_read_dep_o         (apu_read_dep),
+      .apu_read_dep_for_jalr_o(apu_read_dep_for_jalr),
+      .apu_write_regs_i       (apu_write_regs),
+      .apu_write_regs_valid_i (apu_write_regs_valid),
+      .apu_write_dep_o        (apu_write_dep),
 
       .apu_perf_type_o(perf_apu_type),
       .apu_perf_cont_o(perf_apu_cont),
       .apu_perf_wb_o  (perf_apu_wb),
       .apu_ready_wb_o (apu_ready_wb),
-      .apu_busy_o     (apu_busy),
+      .apu_busy_o     (apu_busy_o),
 
-      // apu-interconnect
+      // CVFPU interface
       // handshake signals
       .apu_req_o     (apu_req_o),
       .apu_gnt_i     (apu_gnt_i),
@@ -818,6 +830,7 @@ module cv32e40p_core
       // response channel
       .apu_rvalid_i  (apu_rvalid_i),
       .apu_result_i  (apu_result_i),
+      .apu_flags_i   (apu_flags_i),
 
       .lsu_en_i   (data_req_ex),
       .lsu_rdata_i(lsu_rdata),
@@ -835,18 +848,20 @@ module cv32e40p_core
       .regfile_we_i   (regfile_we_ex),
 
       // Output of ex stage pipeline
-      .regfile_waddr_wb_o(regfile_waddr_fw_wb_o),
-      .regfile_we_wb_o   (regfile_we_wb),
-      .regfile_wdata_wb_o(regfile_wdata),
+      .regfile_waddr_wb_o   (regfile_waddr_fw_wb_o),
+      .regfile_we_wb_o      (regfile_we_wb),
+      .regfile_we_wb_power_o(regfile_we_wb_power),
+      .regfile_wdata_wb_o   (regfile_wdata),
 
       // To IF: Jump and branch target and decision
       .jump_target_o    (jump_target_ex),
       .branch_decision_o(branch_decision),
 
       // To ID stage: Forwarding signals
-      .regfile_alu_waddr_fw_o(regfile_alu_waddr_fw),
-      .regfile_alu_we_fw_o   (regfile_alu_we_fw),
-      .regfile_alu_wdata_fw_o(regfile_alu_wdata_fw),
+      .regfile_alu_waddr_fw_o   (regfile_alu_waddr_fw),
+      .regfile_alu_we_fw_o      (regfile_alu_we_fw),
+      .regfile_alu_we_fw_power_o(regfile_alu_we_fw_power),
+      .regfile_alu_wdata_fw_o   (regfile_alu_wdata_fw),
 
       // stall control
       .is_decoding_i (is_decoding),
@@ -931,15 +946,17 @@ module cv32e40p_core
   //////////////////////////////////////
 
   cv32e40p_cs_registers #(
+      .N_HWLP          (N_HWLP),
       .A_EXTENSION     (A_EXTENSION),
       .FPU             (FPU),
+      .ZFINX           (ZFINX),
       .APU             (APU),
       .PULP_SECURE     (PULP_SECURE),
       .USE_PMP         (USE_PMP),
       .N_PMP_ENTRIES   (N_PMP_ENTRIES),
       .NUM_MHPMCOUNTERS(NUM_MHPMCOUNTERS),
-      .PULP_XPULP      (PULP_XPULP),
-      .PULP_CLUSTER    (PULP_CLUSTER),
+      .COREV_PULP      (COREV_PULP),
+      .COREV_CLUSTER   (COREV_CLUSTER),
       .DEBUG_TRIGGER_EN(DEBUG_TRIGGER_EN)
   ) cs_registers_i (
       .clk  (clk),
@@ -960,9 +977,11 @@ module cv32e40p_core
       .csr_op_i        (csr_op),
       .csr_rdata_o     (csr_rdata),
 
+      .fs_off_o   (fs_off),
       .frm_o      (frm_csr),
       .fflags_i   (fflags_csr),
       .fflags_we_i(fflags_we),
+      .fregs_we_i (fregs_we),
 
       // Interrupt related control signals
       .mie_bypass_o  (mie_bypass),
@@ -1012,10 +1031,6 @@ module cv32e40p_core
       .hwlp_end_i  (hwlp_end),
       .hwlp_cnt_i  (hwlp_cnt),
 
-      .hwlp_regid_o(csr_hwlp_regid),
-      .hwlp_we_o   (csr_hwlp_we),
-      .hwlp_data_o (csr_hwlp_data),
-
       // performance counter related signals
       .mhpmevent_minstret_i    (mhpmevent_minstret),
       .mhpmevent_load_i        (mhpmevent_load),
@@ -1035,13 +1050,16 @@ module cv32e40p_core
   );
 
   //  CSR access
-  assign csr_addr     = csr_addr_int;
-  assign csr_wdata    = alu_operand_a_ex;
-  assign csr_op       = csr_op_ex;
+  assign csr_addr = csr_addr_int;
+  assign csr_wdata = alu_operand_a_ex;
+  assign csr_op = csr_op_ex;
 
   assign csr_addr_int = csr_num_e'(csr_access_ex ? alu_operand_b_ex[11:0] : '0);
 
-
+  //  Floating-Point registers write
+  assign fregs_we     = (FPU == 1 & ZFINX == 0) ? ((regfile_alu_we_fw && regfile_alu_waddr_fw[5]) ||
+                                                   (regfile_we_wb     && regfile_waddr_fw_wb_o[5]))
+                                                : 1'b0;
 
   ///////////////////////////
   //   ____  __  __ ____   //
@@ -1106,7 +1124,7 @@ module cv32e40p_core
   //----------------------------------------------------------------------------
 
   generate
-    if (PULP_CLUSTER) begin : gen_pulp_cluster_assumptions
+    if (COREV_CLUSTER) begin : gen_pulp_cluster_assumptions
 
       // Assumptions/requirements on the environment when pulp_clock_en_i = 0
       property p_env_req_0;
@@ -1133,25 +1151,8 @@ module cv32e40p_core
   // Assertions
   //----------------------------------------------------------------------------
 
-  // PULP_XPULP, PULP_CLUSTER, FPU, PULP_ZFINX
-  always_ff @(posedge rst_ni) begin
-    if (PULP_XPULP) begin
-      $warning(
-          "PULP_XPULP == 1 has not been verified yet and non-backward compatible RTL fixes are expected (see https://github.com/openhwgroup/cv32e40p/issues/452)");
-    end
-    if (PULP_CLUSTER) begin
-      $warning("PULP_CLUSTER == 1 has not been verified yet");
-    end
-    if (FPU) begin
-      $warning("FPU == 1 has not been verified yet");
-    end
-    if (PULP_ZFINX) begin
-      $warning("PULP_ZFINX == 1 has not been verified yet");
-    end
-  end
-
   generate
-    if (!PULP_CLUSTER) begin : gen_no_pulp_cluster_assertions
+    if (!COREV_CLUSTER) begin : gen_no_pulp_cluster_assertions
       // Check that a taken IRQ is actually enabled (e.g. that we do not react to an IRQ that was just disabled in MIE)
       property p_irq_enabled_0;
         @(posedge clk) disable iff (!rst_ni) (pc_set && (pc_mux_id == PC_EXCEPTION) && (exc_pc_mux_id == EXC_PC_IRQ)) |->
@@ -1173,7 +1174,7 @@ module cv32e40p_core
   endgenerate
 
   generate
-    if (!PULP_XPULP) begin : gen_no_pulp_xpulp_assertions
+    if (!COREV_PULP) begin : gen_no_pulp_xpulp_assertions
 
       // Illegal, ECALL, EBRK checks excluded for PULP due to other definition for for Hardware Loop
 

@@ -24,7 +24,7 @@
 //                 is fixed to 0. This register file is based on latches and  //
 //                 is thus smaller than the flip-flop based register file.    //
 //                 Also supports the fp-register file now if FPU=1            //
-//                 If PULP_ZFINX is 1, floating point operations take values  //
+//                 If ZFINX is 1, floating point operations take values       //
 //                 from the X register file                                   //
 //                                                                            //
 ////////////////////////////////////////////////////////////////////////////////
@@ -33,7 +33,7 @@ module cv32e40p_register_file #(
     parameter ADDR_WIDTH = 5,
     parameter DATA_WIDTH = 32,
     parameter FPU        = 0,
-    parameter PULP_ZFINX = 0
+    parameter ZFINX      = 0
 ) (
     // Clock and Reset
     input logic clk,
@@ -68,7 +68,7 @@ module cv32e40p_register_file #(
   localparam NUM_WORDS = 2 ** (ADDR_WIDTH - 1);
   // number of floating point registers
   localparam NUM_FP_WORDS = 2 ** (ADDR_WIDTH - 1);
-  localparam NUM_TOT_WORDS = FPU ? (PULP_ZFINX ? NUM_WORDS : NUM_WORDS + NUM_FP_WORDS) : NUM_WORDS;
+  localparam NUM_TOT_WORDS = FPU ? (ZFINX ? NUM_WORDS : NUM_WORDS + NUM_FP_WORDS) : NUM_WORDS;
 
   // integer register file
   logic [   DATA_WIDTH-1:0] mem            [NUM_WORDS];
@@ -172,19 +172,19 @@ module cv32e40p_register_file #(
     mem[0] = '0;
 
     for (k = 1; k < NUM_WORDS; k++) begin : w_WordIter
-      if (~rst_n) mem[k] = '0;
-      else if (mem_clocks[k] == 1'b1) mem[k] = waddr_onehot_b_q[k] ? wdata_b_q : wdata_a_q;
+      if (~rst_n) mem[k] <= '0;
+      else if (mem_clocks[k] == 1'b1) mem[k] <= waddr_onehot_b_q[k] ? wdata_b_q : wdata_a_q;
     end
   end
 
-  if (FPU == 1 && PULP_ZFINX == 0) begin
+  if (FPU == 1 && ZFINX == 0) begin
     // Floating point registers
     always_latch begin : latch_wdata_fp
       if (FPU == 1) begin
         for (l = 0; l < NUM_FP_WORDS; l++) begin : w_WordIter
-          if (~rst_n) mem_fp[l] = '0;
+          if (~rst_n) mem_fp[l] <= '0;
           else if (mem_clocks[l+NUM_WORDS] == 1'b1)
-            mem_fp[l] = waddr_onehot_b_q[l+NUM_WORDS] ? wdata_b_q : wdata_a_q;
+            mem_fp[l] <= waddr_onehot_b_q[l+NUM_WORDS] ? wdata_b_q : wdata_a_q;
         end
       end
     end

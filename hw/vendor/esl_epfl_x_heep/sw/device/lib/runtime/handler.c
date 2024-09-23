@@ -2,10 +2,14 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "handler.h"
+#ifdef __cplusplus
+extern "C" {
+#endif  // __cplusplus
 
+#include "handler.h"
 #include "csr.h"
 #include "stdasm.h"
+#include <stdio.h>'
 
 /**
  * Return value of mtval
@@ -82,90 +86,6 @@ __attribute__((weak)) void handler_irq_external(void) {
   }
 }
 
-__attribute__((weak)) void handler_irq_fast_timer_1(void) {
-  printf("Fast timer 1 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_timer_2(void) {
-  printf("Fast timer 2 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_timer_3(void) {
-  printf("Fast timer 3 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_dma(void) {
-  printf("Fast dma IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_spi(void) {
-  printf("Fast spi IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_spi_flash(void) {
-  printf("Fast spi flash IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_gpio_0(void) {
-  printf("Fast gpio 0 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_gpio_1(void) {
-  printf("Fast gpio 1 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_gpio_2(void) {
-  printf("Fast gpio 2 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_gpio_3(void) {
-  printf("Fast gpio 3 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_gpio_4(void) {
-  printf("Fast gpio 4 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_gpio_5(void) {
-  printf("Fast gpio 5 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_gpio_6(void) {
-  printf("Fast gpio 6 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
-__attribute__((weak)) void handler_irq_fast_gpio_7(void) {
-  printf("Fast gpio 7 IRQ triggered!\n");
-  while (1) {
-  }
-}
-
 __attribute__((weak)) void handler_instr_acc_fault(void) {
   const char fault_msg[] =
       "Instruction access fault, mtval shows fault address\n";
@@ -194,3 +114,7 @@ __attribute__((weak)) void handler_ecall(void) {
   while (1) {
   }
 }
+#ifdef __cplusplus
+}
+#endif  // __cplusplus
+

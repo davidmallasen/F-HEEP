@@ -31,8 +31,8 @@ module cv32e40p_id_stage
   import cv32e40p_pkg::*;
   import cv32e40p_apu_core_pkg::*;
 #(
-    parameter PULP_XPULP        =  1,                     // PULP ISA Extension (including PULP specific CSRs and hardware loop, excluding p.elw)
-    parameter PULP_CLUSTER = 0,
+    parameter COREV_PULP =  1,  // PULP ISA Extension (including PULP specific CSRs and hardware loop, excluding cv.elw)
+    parameter COREV_CLUSTER = 0,
     parameter N_HWLP = 2,
     parameter N_HWLP_BITS = $clog2(N_HWLP),
     parameter PULP_SECURE = 0,
@@ -40,7 +40,9 @@ module cv32e40p_id_stage
     parameter A_EXTENSION = 0,
     parameter APU = 0,
     parameter FPU = 0,
-    parameter PULP_ZFINX = 0,
+    parameter FPU_ADDMUL_LAT = 0,
+    parameter FPU_OTHERS_LAT = 0,
+    parameter ZFINX = 0,
     parameter APU_NARGS_CPU = 3,
     parameter APU_WOP_CPU = 6,
     parameter APU_NDSFLAGS_CPU = 15,
@@ -68,6 +70,7 @@ module cv32e40p_id_stage
     output logic        branch_in_ex_o,
     input  logic        branch_decision_i,
     output logic [31:0] jump_target_o,
+    output logic [ 1:0] ctrl_transfer_insn_in_dec_o,
 
     // IF and ID stage signals
     output logic       clear_instr_valid_o,
@@ -141,15 +144,18 @@ module cv32e40p_id_stage
     output logic [APU_NDSFLAGS_CPU-1:0]       apu_flags_ex_o,
     output logic [                 5:0]       apu_waddr_ex_o,
 
-    output logic [     2:0][5:0] apu_read_regs_o,
-    output logic [     2:0]      apu_read_regs_valid_o,
-    input  logic                 apu_read_dep_i,
-    output logic [     1:0][5:0] apu_write_regs_o,
-    output logic [     1:0]      apu_write_regs_valid_o,
-    input  logic                 apu_write_dep_i,
-    output logic                 apu_perf_dep_o,
-    input  logic                 apu_busy_i,
-    input  logic [C_RM-1:0]      frm_i,
+    output logic [2:0][5:0] apu_read_regs_o,
+    output logic [2:0]      apu_read_regs_valid_o,
+    input  logic            apu_read_dep_i,
+    input  logic            apu_read_dep_for_jalr_i,
+    output logic [1:0][5:0] apu_write_regs_o,
+    output logic [1:0]      apu_write_regs_valid_o,
+    input  logic            apu_write_dep_i,
+    output logic            apu_perf_dep_o,
+    input  logic            apu_busy_i,
+
+    input logic            fs_off_i,
+    input logic [C_RM-1:0] frm_i,
 
     // CSR ID/EX
     output logic              csr_access_ex_o,
@@ -171,11 +177,6 @@ module cv32e40p_id_stage
     output logic [N_HWLP-1:0][31:0] hwlp_cnt_o,
     output logic                    hwlp_jump_o,
     output logic [      31:0]       hwlp_target_o,
-
-    // hwloop signals from CS register
-    input logic [N_HWLP_BITS-1:0] csr_hwlp_regid_i,
-    input logic [            2:0] csr_hwlp_we_i,
-    input logic [           31:0] csr_hwlp_data_i,
 
     // Interface to load store unit
     output logic       data_req_ex_o,
@@ -225,10 +226,12 @@ module cv32e40p_id_stage
     // Forward Signals
     input logic [5:0] regfile_waddr_wb_i,
     input logic regfile_we_wb_i,
+    input logic regfile_we_wb_power_i,
     input  logic [31:0] regfile_wdata_wb_i, // From wb_stage: selects data from data memory, ex_stage result and sp rdata
 
     input logic [ 5:0] regfile_alu_waddr_fw_i,
     input logic        regfile_alu_we_fw_i,
+    input logic        regfile_alu_we_fw_power_i,
     input logic [31:0] regfile_alu_wdata_fw_i,
 
     // from ALU
@@ -405,16 +408,15 @@ module cv32e40p_id_stage
   logic [5:0] atop_id;
 
   // hwloop signals
-  logic [N_HWLP_BITS-1:0] hwlp_regid, hwlp_regid_int;
-  logic [2:0] hwlp_we, hwlp_we_int, hwlp_we_masked;
-  logic        hwlp_target_mux_sel;
-  logic        hwlp_start_mux_sel;
-  logic        hwlp_cnt_mux_sel;
+  logic [N_HWLP_BITS-1:0] hwlp_regid;
+  logic [2:0] hwlp_we, hwlp_we_masked;
+  logic        [       1:0] hwlp_target_mux_sel;
+  logic        [       1:0] hwlp_start_mux_sel;
+  logic                     hwlp_cnt_mux_sel;
 
-  logic [31:0] hwlp_target;
-  logic [31:0] hwlp_start, hwlp_start_int;
-  logic [31:0] hwlp_end;
-  logic [31:0] hwlp_cnt, hwlp_cnt_int;
+  logic        [      31:0] hwlp_start;
+  logic        [      31:0] hwlp_end;
+  logic        [      31:0] hwlp_cnt;
   logic        [N_HWLP-1:0] hwlp_dec_cnt;
   logic                     hwlp_valid;
 
@@ -454,6 +456,7 @@ module cv32e40p_id_stage
   logic [ 1:0] imm_vec_ext_id;
   logic [ 4:0] mult_imm_id;
 
+  logic        alu_vec;
   logic [ 1:0] alu_vec_mode;
   logic        scalar_replication;
   logic        scalar_replication_c;
@@ -770,8 +773,13 @@ module cv32e40p_id_stage
     endcase
   end
 
-  assign imm_vec_ext_id = imm_vu_type[1:0];
-
+  generate
+    if (!COREV_PULP) begin
+      assign imm_vec_ext_id = imm_vu_type[1:0];
+    end else begin
+      assign imm_vec_ext_id = (alu_vec) ? imm_vu_type[1:0] : 2'b0;
+    end
+  endgenerate
 
   always_comb begin
     unique case (mult_imm_mux)
@@ -800,11 +808,20 @@ module cv32e40p_id_stage
       // dependency checks
       always_comb begin
         unique case (alu_op_a_mux_sel)
+          OP_A_CURRPC: begin
+            if (ctrl_transfer_target_mux_sel == JT_JALR) begin
+              apu_read_regs[0]       = regfile_addr_ra_id;
+              apu_read_regs_valid[0] = 1'b1;
+            end else begin
+              apu_read_regs[0]       = regfile_addr_ra_id;
+              apu_read_regs_valid[0] = 1'b0;
+            end
+          end  // OP_A_CURRPC:
           OP_A_REGA_OR_FWD: begin
             apu_read_regs[0]       = regfile_addr_ra_id;
             apu_read_regs_valid[0] = 1'b1;
           end  // OP_A_REGA_OR_FWD:
-          OP_A_REGB_OR_FWD: begin
+          OP_A_REGB_OR_FWD, OP_A_REGC_OR_FWD: begin
             apu_read_regs[0]       = regfile_addr_rb_id;
             apu_read_regs_valid[0] = 1'b1;
           end
@@ -821,13 +838,22 @@ module cv32e40p_id_stage
             apu_read_regs[1]       = regfile_addr_ra_id;
             apu_read_regs_valid[1] = 1'b1;
           end
-          OP_B_REGB_OR_FWD: begin
+          OP_B_REGB_OR_FWD, OP_B_BMASK: begin
             apu_read_regs[1]       = regfile_addr_rb_id;
             apu_read_regs_valid[1] = 1'b1;
           end
           OP_B_REGC_OR_FWD: begin
             apu_read_regs[1]       = regfile_addr_rc_id;
             apu_read_regs_valid[1] = 1'b1;
+          end
+          OP_B_IMM: begin
+            if (alu_bmask_b_mux_sel == BMASK_B_REG) begin
+              apu_read_regs[1]       = regfile_addr_rb_id;
+              apu_read_regs_valid[1] = 1'b1;
+            end else begin
+              apu_read_regs[1]       = regfile_addr_rb_id;
+              apu_read_regs_valid[1] = 1'b0;
+            end
           end
           default: begin
             apu_read_regs[1]       = regfile_addr_rb_id;
@@ -843,8 +869,15 @@ module cv32e40p_id_stage
             apu_read_regs_valid[2] = 1'b1;
           end
           OP_C_REGC_OR_FWD: begin
-            apu_read_regs[2]       = regfile_addr_rc_id;
-            apu_read_regs_valid[2] = 1'b1;
+            if ((alu_op_a_mux_sel != OP_A_REGC_OR_FWD) && (ctrl_transfer_target_mux_sel != JT_JALR) &&
+                !((alu_op_b_mux_sel == OP_B_IMM) && (alu_bmask_b_mux_sel == BMASK_B_REG)) &&
+                !(alu_op_b_mux_sel == OP_B_BMASK)) begin
+              apu_read_regs[2]       = regfile_addr_rc_id;
+              apu_read_regs_valid[2] = 1'b1;
+            end else begin
+              apu_read_regs[2]       = regfile_addr_rc_id;
+              apu_read_regs_valid[2] = 1'b0;
+            end
           end
           default: begin
             apu_read_regs[2]       = regfile_addr_rc_id;
@@ -899,7 +932,7 @@ module cv32e40p_id_stage
       .ADDR_WIDTH(6),
       .DATA_WIDTH(32),
       .FPU       (FPU),
-      .PULP_ZFINX(PULP_ZFINX)
+      .ZFINX     (ZFINX)
   ) register_file_i (
       .clk  (clk),
       .rst_n(rst_n),
@@ -921,12 +954,12 @@ module cv32e40p_id_stage
       // Write port a
       .waddr_a_i(regfile_waddr_wb_i),
       .wdata_a_i(regfile_wdata_wb_i),
-      .we_a_i   (regfile_we_wb_i),
+      .we_a_i   (regfile_we_wb_power_i),
 
       // Write port b
       .waddr_b_i(regfile_alu_waddr_fw_i),
       .wdata_b_i(regfile_alu_wdata_fw_i),
-      .we_b_i   (regfile_alu_we_fw_i)
+      .we_b_i   (regfile_alu_we_fw_power_i)
   );
 
 
@@ -940,11 +973,13 @@ module cv32e40p_id_stage
   ///////////////////////////////////////////////
 
   cv32e40p_decoder #(
-      .PULP_XPULP      (PULP_XPULP),
-      .PULP_CLUSTER    (PULP_CLUSTER),
+      .COREV_PULP      (COREV_PULP),
+      .COREV_CLUSTER   (COREV_CLUSTER),
       .A_EXTENSION     (A_EXTENSION),
       .FPU             (FPU),
-      .PULP_ZFINX      (PULP_ZFINX),
+      .FPU_ADDMUL_LAT  (FPU_ADDMUL_LAT),
+      .FPU_OTHERS_LAT  (FPU_OTHERS_LAT),
+      .ZFINX           (ZFINX),
       .PULP_SECURE     (PULP_SECURE),
       .USE_PMP         (USE_PMP),
       .APU_WOP_CPU     (APU_WOP_CPU),
@@ -993,6 +1028,7 @@ module cv32e40p_id_stage
       .alu_op_a_mux_sel_o    (alu_op_a_mux_sel),
       .alu_op_b_mux_sel_o    (alu_op_b_mux_sel),
       .alu_op_c_mux_sel_o    (alu_op_c_mux_sel),
+      .alu_vec_o             (alu_vec),
       .alu_vec_mode_o        (alu_vec_mode),
       .scalar_replication_o  (scalar_replication),
       .scalar_replication_c_o(scalar_replication_c),
@@ -1012,6 +1048,7 @@ module cv32e40p_id_stage
       .mult_dot_signed_o (mult_dot_signed),
 
       // FPU / APU signals
+      .fs_off_i     (fs_off_i),
       .frm_i        (frm_i),
       .fpu_src_fmt_o(fpu_src_fmt),
       .fpu_dst_fmt_o(fpu_dst_fmt),
@@ -1046,7 +1083,7 @@ module cv32e40p_id_stage
       .atop_o(atop_id),
 
       // hwloop signals
-      .hwlp_we_o            (hwlp_we_int),
+      .hwlp_we_o            (hwlp_we),
       .hwlp_target_mux_sel_o(hwlp_target_mux_sel),
       .hwlp_start_mux_sel_o (hwlp_start_mux_sel),
       .hwlp_cnt_mux_sel_o   (hwlp_cnt_mux_sel),
@@ -1056,7 +1093,7 @@ module cv32e40p_id_stage
       .debug_wfi_no_sleep_i(debug_wfi_no_sleep),
 
       // jump/branches
-      .ctrl_transfer_insn_in_dec_o   (ctrl_transfer_insn_in_dec),
+      .ctrl_transfer_insn_in_dec_o   (ctrl_transfer_insn_in_dec_o),
       .ctrl_transfer_insn_in_id_o    (ctrl_transfer_insn_in_id),
       .ctrl_transfer_target_mux_sel_o(ctrl_transfer_target_mux_sel),
 
@@ -1075,8 +1112,9 @@ module cv32e40p_id_stage
   ////////////////////////////////////////////////////////////////////
 
   cv32e40p_controller #(
-      .PULP_CLUSTER(PULP_CLUSTER),
-      .PULP_XPULP  (PULP_XPULP)
+      .COREV_CLUSTER(COREV_CLUSTER),
+      .COREV_PULP   (COREV_PULP),
+      .FPU          (FPU)
   ) controller_i (
       .clk          (clk),  // Gated clock
       .clk_ungated_i(clk_ungated_i),  // Ungated clock
@@ -1123,8 +1161,7 @@ module cv32e40p_id_stage
       .trap_addr_mux_o(trap_addr_mux_o),
 
       // HWLoop signls
-      .pc_id_i        (pc_id_i),
-      .is_compressed_i(is_compressed_i),
+      .pc_id_i(pc_id_i),
 
       .hwlp_start_addr_i(hwlp_start_o),
       .hwlp_end_addr_i  (hwlp_end_o),
@@ -1146,16 +1183,17 @@ module cv32e40p_id_stage
       .mult_multicycle_i(mult_multicycle_i),
 
       // APU
-      .apu_en_i       (apu_en),
-      .apu_read_dep_i (apu_read_dep_i),
-      .apu_write_dep_i(apu_write_dep_i),
+      .apu_en_i               (apu_en),
+      .apu_read_dep_i         (apu_read_dep_i),
+      .apu_read_dep_for_jalr_i(apu_read_dep_for_jalr_i),
+      .apu_write_dep_i        (apu_write_dep_i),
 
       .apu_stall_o(apu_stall),
 
       // jump/branch control
       .branch_taken_ex_i          (branch_taken_ex),
       .ctrl_transfer_insn_in_id_i (ctrl_transfer_insn_in_id),
-      .ctrl_transfer_insn_in_dec_i(ctrl_transfer_insn_in_dec),
+      .ctrl_transfer_insn_in_dec_i(ctrl_transfer_insn_in_dec_o),
 
       // Interrupt signals
       .irq_wu_ctrl_i     (irq_wu_ctrl),
@@ -1280,7 +1318,7 @@ module cv32e40p_id_stage
   );
 
   generate
-    if (PULP_XPULP) begin : gen_hwloop_regs
+    if (COREV_PULP) begin : gen_hwloop_regs
 
       ///////////////////////////////////////////////
       //  _   ___        ___     ___   ___  ____   //
@@ -1302,7 +1340,7 @@ module cv32e40p_id_stage
           .hwlp_start_data_i(hwlp_start),
           .hwlp_end_data_i  (hwlp_end),
           .hwlp_cnt_data_i  (hwlp_cnt),
-          .hwlp_we_i        (hwlp_we),
+          .hwlp_we_i        (hwlp_we_masked),
           .hwlp_regid_i     (hwlp_regid),
 
           // from controller
@@ -1317,33 +1355,36 @@ module cv32e40p_id_stage
           .hwlp_dec_cnt_i(hwlp_dec_cnt)
       );
 
-      assign hwlp_valid     = instr_valid_i & clear_instr_valid_o;
+      assign hwlp_valid = instr_valid_i & clear_instr_valid_o;
 
       // hwloop register id
-      assign hwlp_regid_int = instr[7];  // rd contains hwloop register id
+      assign hwlp_regid = instr[7];  // rd contains hwloop register id
 
       // hwloop target mux
       always_comb begin
         case (hwlp_target_mux_sel)
-          1'b0: hwlp_target = pc_id_i + {imm_iz_type[30:0], 1'b0};
-          1'b1: hwlp_target = pc_id_i + {imm_z_type[30:0], 1'b0};
+          2'b00:   hwlp_end = pc_id_i + {imm_iz_type[29:0], 2'b0};
+          2'b01:   hwlp_end = pc_id_i + {imm_z_type[29:0], 2'b0};
+          2'b10:   hwlp_end = operand_a_fw_id;
+          default: hwlp_end = operand_a_fw_id;
         endcase
       end
 
       // hwloop start mux
       always_comb begin
         case (hwlp_start_mux_sel)
-          1'b0: hwlp_start_int = hwlp_target;  // for PC + I imm
-          1'b1: hwlp_start_int = pc_id_i + 4;  // for next PC
+          2'b00:   hwlp_start = hwlp_end;  // for PC + I imm
+          2'b01:   hwlp_start = pc_id_i + 4;  // for next PC
+          2'b10:   hwlp_start = operand_a_fw_id;
+          default: hwlp_start = operand_a_fw_id;
         endcase
       end
-
 
       // hwloop cnt mux
       always_comb begin : hwlp_cnt_mux
         case (hwlp_cnt_mux_sel)
-          1'b0: hwlp_cnt_int = imm_iz_type;
-          1'b1: hwlp_cnt_int = operand_a_fw_id;
+          1'b0: hwlp_cnt = imm_iz_type;
+          1'b1: hwlp_cnt = operand_a_fw_id;
         endcase
         ;
       end
@@ -1355,14 +1396,7 @@ module cv32e40p_id_stage
         Although it may not be a HW bugs causing uninteded behaviours,
         it helps verifications processes when checking the hwloop regs
       */
-      assign hwlp_we_masked = hwlp_we_int & ~{3{hwlp_mask}} & {3{id_ready_o}};
-
-      // multiplex between access from instructions and access via CSR registers
-      assign hwlp_start = hwlp_we_masked[0] ? hwlp_start_int : csr_hwlp_data_i;
-      assign hwlp_end   = hwlp_we_masked[1] ? hwlp_target    : csr_hwlp_data_i;
-      assign hwlp_cnt   = hwlp_we_masked[2] ? hwlp_cnt_int   : csr_hwlp_data_i;
-      assign hwlp_regid = (|hwlp_we_masked) ? hwlp_regid_int : csr_hwlp_regid_i;
-      assign hwlp_we    = (|hwlp_we_masked) ? hwlp_we_masked : csr_hwlp_we_i;
+      assign hwlp_we_masked = hwlp_we & ~{3{hwlp_mask}} & {3{id_ready_o}};
 
     end else begin : gen_no_hwloop_regs
 
@@ -1370,16 +1404,11 @@ module cv32e40p_id_stage
       assign hwlp_end_o     = 'b0;
       assign hwlp_cnt_o     = 'b0;
       assign hwlp_valid     = 'b0;
-      assign hwlp_regid_int = 'b0;
-      assign hwlp_target    = 'b0;
-      assign hwlp_start_int = 'b0;
-      assign hwlp_cnt_int   = 'b0;
       assign hwlp_we_masked = 'b0;
       assign hwlp_start     = 'b0;
       assign hwlp_end       = 'b0;
       assign hwlp_cnt       = 'b0;
       assign hwlp_regid     = 'b0;
-      assign hwlp_we        = 'b0;
 
     end
   endgenerate
@@ -1485,9 +1514,13 @@ module cv32e40p_id_stage
       if (id_valid_o) begin  // unstall the whole pipeline
         alu_en_ex_o <= alu_en;
         if (alu_en) begin
-          alu_operator_ex_o   <= alu_operator;
-          alu_operand_a_ex_o  <= alu_operand_a;
-          alu_operand_b_ex_o  <= alu_operand_b;
+          alu_operator_ex_o  <= alu_operator;
+          alu_operand_a_ex_o <= alu_operand_a;
+          if (alu_op_b_mux_sel == OP_B_REGB_OR_FWD && (alu_operator == ALU_CLIP || alu_operator == ALU_CLIPU)) begin
+            alu_operand_b_ex_o <= {1'b0, alu_operand_b[30:0]};
+          end else begin
+            alu_operand_b_ex_o <= alu_operand_b;
+          end
           alu_operand_c_ex_o  <= alu_operand_c;
           bmask_a_ex_o        <= bmask_a_id;
           bmask_b_ex_o        <= bmask_b_id;
@@ -1728,12 +1761,13 @@ module cv32e40p_id_stage
   endgenerate
 
   generate
-    if (!PULP_XPULP) begin : gen_no_pulp_xpulp_assertions
+    if (!COREV_PULP) begin : gen_no_pulp_xpulp_assertions
 
       // Check that PULP extension opcodes are decoded as illegal when PULP extension is not enabled
       property p_illegal_1;
-        @(posedge clk) disable iff (!rst_n) ((instr[6:0] == OPCODE_LOAD_POST) || (instr[6:0] == OPCODE_STORE_POST) || (instr[6:0] == OPCODE_PULP_OP) ||
-                                              (instr[6:0] == OPCODE_HWLOOP) || (instr[6:0] == OPCODE_VECOP)) |-> (illegal_insn_dec == 'b1);
+        @(posedge clk) disable iff (!rst_n) ((instr[6:0] == OPCODE_CUSTOM_0) || (instr[6:0] == OPCODE_CUSTOM_1) ||
+                                             (instr[6:0] == OPCODE_CUSTOM_2) || (instr[6:0] == OPCODE_CUSTOM_3))
+                                            |-> (illegal_insn_dec == 'b1);
       endproperty
 
       a_illegal_1 :

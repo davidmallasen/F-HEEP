@@ -30,8 +30,9 @@
 
 module cv32e40p_controller import cv32e40p_pkg::*;
 #(
-  parameter PULP_CLUSTER = 0,
-  parameter PULP_XPULP   = 1
+  parameter COREV_CLUSTER = 0,
+  parameter COREV_PULP    = 0,
+  parameter FPU           = 0
 )
 (
   input  logic        clk,                        // Gated clock
@@ -78,7 +79,6 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 
   // HWLoop signls
   input  logic [31:0]       pc_id_i,
-  input  logic              is_compressed_i,
 
   // from hwloop_regs
   input  logic [1:0] [31:0] hwlp_start_addr_i,
@@ -105,6 +105,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
   // APU dependency checks
   input  logic        apu_en_i,
   input  logic        apu_read_dep_i,
+  input  logic        apu_read_dep_for_jalr_i,
   input  logic        apu_write_dep_i,
 
   output logic        apu_stall_o,
@@ -199,7 +200,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
   input  logic        wb_ready_i,                 // WB stage is ready
 
   // Performance Counters
-  output logic        perf_pipeline_stall_o       // stall due to elw extra cycles
+  output logic        perf_pipeline_stall_o       // stall due to cv.elw extra cycles
 );
 
   // FSM state encoding
@@ -208,13 +209,13 @@ module cv32e40p_controller import cv32e40p_pkg::*;
   // Debug state
   debug_state_e debug_fsm_cs, debug_fsm_ns;
 
-  logic jump_done, jump_done_q, jump_in_dec, branch_in_id_dec, branch_in_id;
+  logic jump_done, jump_done_q, jump_in_dec, branch_in_id;
 
   logic data_err_q;
 
   logic debug_mode_q, debug_mode_n;
   logic ebrk_force_debug_mode;
-  logic is_hwlp_illegal, is_hwlp_body;
+  logic is_hwlp_body;
   logic illegal_insn_q, illegal_insn_n;
   logic debug_req_entry_q, debug_req_entry_n;
   logic debug_force_wakeup_q, debug_force_wakeup_n;
@@ -223,6 +224,10 @@ module cv32e40p_controller import cv32e40p_pkg::*;
   logic hwlp_end1_eq_pc;
   logic hwlp_counter0_gt_1;
   logic hwlp_counter1_gt_1;
+  logic hwlp_counter0_eq_1;
+  logic hwlp_counter1_eq_1;
+  logic hwlp_counter0_eq_0;
+  logic hwlp_counter1_eq_0;
   logic hwlp_end0_eq_pc_plus4;
   logic hwlp_end1_eq_pc_plus4;
   logic hwlp_start0_leq_pc;
@@ -290,7 +295,6 @@ module cv32e40p_controller import cv32e40p_pkg::*;
     jump_in_dec            = ctrl_transfer_insn_in_dec_i == BRANCH_JALR || ctrl_transfer_insn_in_dec_i == BRANCH_JAL;
 
     branch_in_id           = ctrl_transfer_insn_in_id_i == BRANCH_COND;
-    branch_in_id_dec       = ctrl_transfer_insn_in_dec_i == BRANCH_COND;
 
     ebrk_force_debug_mode  = (debug_ebreakm_i && current_priv_lvl_i == PRIV_LVL_M) ||
                              (debug_ebreaku_i && current_priv_lvl_i == PRIV_LVL_U);
@@ -314,8 +318,6 @@ module cv32e40p_controller import cv32e40p_pkg::*;
     perf_pipeline_stall_o   = 1'b0;
 
     hwlp_mask_o             = 1'b0;
-
-    is_hwlp_illegal         = 1'b0;
 
     hwlp_dec_cnt_o          = '0;
     hwlp_end_4_id_d         = 1'b0;
@@ -489,6 +491,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
             if ( (debug_req_pending || trigger_match_i) & ~debug_mode_q )
               begin
                 //Serving the debug
+                is_decoding_o     = COREV_PULP ? 1'b0 : 1'b1;
                 halt_if_o         = 1'b1;
                 halt_id_o         = 1'b1;
                 ctrl_fsm_ns       = DBG_FLUSH;
@@ -497,7 +500,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
             else if (irq_req_ctrl_i && ~debug_mode_q)
               begin
                 // Taken IRQ
-                hwlp_mask_o       = PULP_XPULP ? 1'b1 : 1'b0;
+                hwlp_mask_o       = COREV_PULP ? 1'b1 : 1'b0;
 
                 is_decoding_o     = 1'b0;
                 halt_if_o         = 1'b1;
@@ -525,9 +528,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
             else
               begin
 
-                is_hwlp_illegal  = is_hwlp_body & (jump_in_dec || branch_in_id_dec || mret_insn_i || uret_insn_i || dret_insn_i || is_compressed_i || fencei_insn_i || wfi_active);
-
-                if(illegal_insn_i || is_hwlp_illegal) begin
+                if (illegal_insn_i) begin
 
                   halt_if_o         = 1'b1;
                   halt_id_o         = 1'b0;
@@ -596,7 +597,17 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 
                     csr_status_i: begin
                       halt_if_o     = 1'b1;
-                      ctrl_fsm_ns   = id_ready_i ? FLUSH_EX : DECODE;
+                      if (~id_ready_i) begin
+                        ctrl_fsm_ns = DECODE;
+                      end else begin
+                        ctrl_fsm_ns = FLUSH_EX;
+                        if (hwlp_end0_eq_pc) begin
+                          hwlp_dec_cnt_o[0] = 1'b1;
+                        end
+                        if (hwlp_end1_eq_pc) begin
+                          hwlp_dec_cnt_o[1] = 1'b1;
+                        end
+                      end
                     end
 
                     data_load_event_i: begin
@@ -616,27 +627,35 @@ module cv32e40p_controller import cv32e40p_pkg::*;
                         ctrl_fsm_ns  = hwlp_end0_eq_pc_plus4 || hwlp_end1_eq_pc_plus4 ? DECODE : DECODE_HWLOOP;
 
                         // we can be at the end of HWloop due to a return from interrupt or ecall or ebreak or exceptions
-                        if(hwlp_end0_eq_pc && hwlp_counter0_gt_1) begin
-                            pc_mux_o         = PC_HWLOOP;
-                            if (~jump_done_q) begin
-                              pc_set_o          = 1'b1;
-                              // Keep the instruction and the related address in the Aligner if
-                              // ID is stalled during a jump
-                              jump_done         = 1'b1;
-                              hwlp_dec_cnt_o[0] = 1'b1;
-                            end
-                         end
-                         if(hwlp_end1_eq_pc && hwlp_counter1_gt_1) begin
-                            pc_mux_o         = PC_HWLOOP;
-                            if (~jump_done_q) begin
-                              pc_set_o          = 1'b1;
-                              // Keep the instruction and the related address in the Aligner if
-                              // ID is stalled during a jump
-                              jump_done         = 1'b1;
-                              hwlp_dec_cnt_o[1] = 1'b1;
-                            end
-                         end
+                        if (hwlp_end0_eq_pc && hwlp_counter0_gt_1) begin
+                          pc_mux_o         = PC_HWLOOP;
+                          if (~jump_done_q) begin
+                            pc_set_o          = 1'b1;
+                            // Keep the instruction and the related address in the Aligner if
+                            // ID is stalled during a jump
+                            jump_done         = 1'b1;
+                            hwlp_dec_cnt_o[0] = 1'b1;
+                          end
                         end
+                        if (hwlp_end1_eq_pc && hwlp_counter1_gt_1) begin
+                          pc_mux_o         = PC_HWLOOP;
+                          if (~jump_done_q) begin
+                            pc_set_o          = 1'b1;
+                            // Keep the instruction and the related address in the Aligner if
+                            // ID is stalled during a jump
+                            jump_done         = 1'b1;
+                            hwlp_dec_cnt_o[1] = 1'b1;
+                          end
+                        end
+                      end
+
+                      if (hwlp_end0_eq_pc && hwlp_counter0_eq_1) begin
+                        hwlp_dec_cnt_o[0] = 1'b1;
+                      end
+                      if (hwlp_end1_eq_pc && hwlp_counter1_eq_1) begin
+                        hwlp_dec_cnt_o[1] = 1'b1;
+                      end
+
                     end
 
                   endcase // unique case (1'b1)
@@ -695,7 +714,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 
       DECODE_HWLOOP:
       begin
-        if (PULP_XPULP) begin
+        if (COREV_PULP) begin
           if (instr_valid_i) // valid block
           begin // now analyze the current instruction in the ID stage
 
@@ -704,6 +723,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
             if ( (debug_req_pending || trigger_match_i) & ~debug_mode_q )
               begin
                 //Serving the debug
+                is_decoding_o     = COREV_PULP ? 1'b0 : 1'b1;
                 halt_if_o         = 1'b1;
                 halt_id_o         = 1'b1;
                 ctrl_fsm_ns       = DBG_FLUSH;
@@ -712,7 +732,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
             else if (irq_req_ctrl_i && ~debug_mode_q)
               begin
                 // Taken IRQ
-                hwlp_mask_o       = PULP_XPULP ? 1'b1 : 1'b0;
+                hwlp_mask_o       = COREV_PULP ? 1'b1 : 1'b0;
 
                 is_decoding_o     = 1'b0;
                 halt_if_o         = 1'b1;
@@ -742,9 +762,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
             else
               begin
 
-                is_hwlp_illegal  = (jump_in_dec || branch_in_id_dec || mret_insn_i || uret_insn_i || dret_insn_i || is_compressed_i || fencei_insn_i || wfi_active);
-
-                if(illegal_insn_i || is_hwlp_illegal) begin
+                if (illegal_insn_i) begin
 
                   halt_if_o         = 1'b1;
                   halt_id_o         = 1'b1;
@@ -758,7 +776,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 
                     ebrk_insn_i: begin
                       halt_if_o     = 1'b1;
-                      halt_id_o     = 1'b1;
+                      halt_id_o     = 1'b0;
 
                       if (debug_mode_q)
                         // we got back to the park loop in the debug rom
@@ -770,20 +788,30 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 
                       else begin
                         // otherwise just a normal ebreak exception
-                        ctrl_fsm_ns = FLUSH_EX;
+                        ctrl_fsm_ns = id_ready_i ? FLUSH_EX : DECODE_HWLOOP;
                       end
 
                     end
 
                     ecall_insn_i: begin
                       halt_if_o     = 1'b1;
-                      halt_id_o     = 1'b1;
-                      ctrl_fsm_ns   = FLUSH_EX;
+                      halt_id_o     = 1'b0;
+                      ctrl_fsm_ns   = id_ready_i ? FLUSH_EX : DECODE_HWLOOP;
                     end
 
                     csr_status_i: begin
                       halt_if_o     = 1'b1;
-                      ctrl_fsm_ns   = id_ready_i ? FLUSH_EX : DECODE_HWLOOP;
+                      if (~id_ready_i) begin
+                        ctrl_fsm_ns = DECODE_HWLOOP;
+                      end else begin
+                        ctrl_fsm_ns = FLUSH_EX;
+                        if (hwlp_end0_eq_pc) begin
+                          hwlp_dec_cnt_o[0] = 1'b1;
+                        end
+                        if (hwlp_end1_eq_pc) begin
+                          hwlp_dec_cnt_o[1] = 1'b1;
+                        end
+                      end
                     end
 
                     data_load_event_i: begin
@@ -812,8 +840,8 @@ module cv32e40p_controller import cv32e40p_pkg::*;
                             ctrl_fsm_ns      = is_hwlp_body ? DECODE_HWLOOP : DECODE;
                       end
 
-                      hwlp_dec_cnt_o[0] = hwlp_end0_eq_pc;
-                      hwlp_dec_cnt_o[1] = hwlp_end1_eq_pc;
+                      hwlp_dec_cnt_o[0] = hwlp_end0_eq_pc && !hwlp_counter0_eq_0;
+                      hwlp_dec_cnt_o[1] = hwlp_end1_eq_pc && !hwlp_counter1_eq_0;
 
                     end
                   endcase // unique case (1'b1)
@@ -921,7 +949,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 
       IRQ_FLUSH_ELW:
       begin
-        if (PULP_CLUSTER == 1'b1) begin
+        if (COREV_CLUSTER == 1'b1) begin
           is_decoding_o = 1'b0;
 
           halt_if_o     = 1'b1;
@@ -961,17 +989,17 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 
       ELW_EXE:
       begin
-        if (PULP_CLUSTER == 1'b1) begin
+        if (COREV_CLUSTER == 1'b1) begin
           is_decoding_o = 1'b0;
 
           halt_if_o   = 1'b1;
           halt_id_o   = 1'b1;
 
-          //if we are here, a elw is executing now in the EX stage
+          //if we are here, a cv.elw is executing now in the EX stage
           //or if an interrupt has been received
-          //the ID stage contains the PC_ID of the elw, therefore halt_id is set to invalid the instruction
+          //the ID stage contains the PC_ID of the cv.elw, therefore halt_id is set to invalid the instruction
           //If an interrupt occurs, we replay the ELW
-          //No needs to check irq_int_req_i since in the EX stage there is only the elw, no CSR pendings
+          //No needs to check irq_int_req_i since in the EX stage there is only the cv.elw, no CSR pendings
           if(id_ready_i)
             ctrl_fsm_ns = ((debug_req_pending || trigger_match_i) & ~debug_mode_q) ? DBG_FLUSH : IRQ_FLUSH_ELW;
             // if from the ELW EXE we go to IRQ_FLUSH_ELW, it is assumed that if there was an IRQ req together with the grant and IE was valid, then
@@ -1059,16 +1087,10 @@ module cv32e40p_controller import cv32e40p_pkg::*;
               end
 
               csr_status_i: begin
-
-                if(hwlp_end0_eq_pc && hwlp_counter0_gt_1) begin
-                    pc_mux_o         = PC_HWLOOP;
-                    pc_set_o          = 1'b1;
-                    hwlp_dec_cnt_o[0] = 1'b1;
-              end
-                if(hwlp_end1_eq_pc && hwlp_counter1_gt_1) begin
-                    pc_mux_o         = PC_HWLOOP;
-                    pc_set_o          = 1'b1;
-                    hwlp_dec_cnt_o[1] = 1'b1;
+                if ((hwlp_end0_eq_pc && !hwlp_counter0_eq_0) ||
+                    (hwlp_end1_eq_pc && !hwlp_counter1_eq_0)) begin
+                  pc_mux_o = PC_HWLOOP;
+                  pc_set_o = 1'b1;
                 end
               end
 
@@ -1243,7 +1265,7 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 
 
 generate
-  if(PULP_XPULP) begin : gen_hwlp
+  if(COREV_PULP) begin : gen_hwlp
     //////////////////////////////////////////////////////////////////////////////
     // Convert hwlp_jump_o to a pulse
     //////////////////////////////////////////////////////////////////////////////
@@ -1265,16 +1287,20 @@ generate
       end
     end
 
-    assign hwlp_end0_eq_pc         = hwlp_end_addr_i[0] == pc_id_i;
-    assign hwlp_end1_eq_pc         = hwlp_end_addr_i[1] == pc_id_i;
+    assign hwlp_end0_eq_pc         = hwlp_end_addr_i[0] == pc_id_i + 4;   // Equivalent to hwlp_end_addr_i[0] - 4 == pc_id_i
+    assign hwlp_end1_eq_pc         = hwlp_end_addr_i[1] == pc_id_i + 4;   // Equivalent to hwlp_end_addr_i[1] - 4 == pc_id_i
     assign hwlp_counter0_gt_1      = hwlp_counter_i[0] > 1;
     assign hwlp_counter1_gt_1      = hwlp_counter_i[1] > 1;
-    assign hwlp_end0_eq_pc_plus4   = hwlp_end_addr_i[0] == pc_id_i + 4;
-    assign hwlp_end1_eq_pc_plus4   = hwlp_end_addr_i[1] == pc_id_i + 4;
+    assign hwlp_counter0_eq_1      = hwlp_counter_i[0] == 1;
+    assign hwlp_counter1_eq_1      = hwlp_counter_i[1] == 1;
+    assign hwlp_counter0_eq_0      = hwlp_counter_i[0] == 0;
+    assign hwlp_counter1_eq_0      = hwlp_counter_i[1] == 0;
+    assign hwlp_end0_eq_pc_plus4   = hwlp_end_addr_i[0] == pc_id_i + 8;   // Equivalent to hwlp_end_addr_i[0] - 4 == pc_id_i + 4
+    assign hwlp_end1_eq_pc_plus4   = hwlp_end_addr_i[1] == pc_id_i + 8;   // Equivalent to hwlp_end_addr_i[1] - 4 == pc_id_i + 4
     assign hwlp_start0_leq_pc      = hwlp_start_addr_i[0] <= pc_id_i;
     assign hwlp_start1_leq_pc      = hwlp_start_addr_i[1] <= pc_id_i;
-    assign hwlp_end0_geq_pc        = hwlp_end_addr_i[0] >= pc_id_i;
-    assign hwlp_end1_geq_pc        = hwlp_end_addr_i[1] >= pc_id_i;
+    assign hwlp_end0_geq_pc        = hwlp_end_addr_i[0] >= pc_id_i + 4;   // Equivalent to hwlp_end_addr_i[0] - 4 >= pc_id_i
+    assign hwlp_end1_geq_pc        = hwlp_end_addr_i[1] >= pc_id_i + 4;   // Equivalent to hwlp_end_addr_i[1] - 4 >= pc_id_i;
     assign is_hwlp_body            = ((hwlp_start0_leq_pc && hwlp_end0_geq_pc) && hwlp_counter0_gt_1) ||  ((hwlp_start1_leq_pc && hwlp_end1_geq_pc) && hwlp_counter1_gt_1);
 
   end else begin : gen_no_hwlp
@@ -1285,6 +1311,10 @@ generate
     assign hwlp_end1_eq_pc         = 1'b0;
     assign hwlp_counter0_gt_1      = 1'b0;
     assign hwlp_counter1_gt_1      = 1'b0;
+    assign hwlp_counter0_eq_1      = 1'b0;
+    assign hwlp_counter1_eq_1      = 1'b0;
+    assign hwlp_counter0_eq_0      = 1'b0;
+    assign hwlp_counter1_eq_0      = 1'b0;
     assign hwlp_end0_eq_pc_plus4   = 1'b0;
     assign hwlp_end1_eq_pc_plus4   = 1'b0;
     assign hwlp_start0_leq_pc      = 1'b0;
@@ -1338,7 +1368,10 @@ endgenerate
     if ((ctrl_transfer_insn_in_dec_i == BRANCH_JALR) &&
         (((regfile_we_wb_i == 1'b1) && (reg_d_wb_is_reg_a_i == 1'b1)) ||
          ((regfile_we_ex_i == 1'b1) && (reg_d_ex_is_reg_a_i == 1'b1)) ||
-         ((regfile_alu_we_fw_i == 1'b1) && (reg_d_alu_is_reg_a_i == 1'b1))) )
+         ((regfile_alu_we_fw_i == 1'b1) && (reg_d_alu_is_reg_a_i == 1'b1)) ||
+         (FPU && (apu_read_dep_for_jalr_i == 1'b1))
+        )
+       )
     begin
       jr_stall_o      = 1'b1;
       deassert_we_o   = 1'b1;
@@ -1436,15 +1469,15 @@ endgenerate
   assign debug_mode_o = debug_mode_q;
   assign debug_req_pending = debug_req_i || debug_req_q;
 
-  // Do not let p.elw cause core_sleep_o during debug
+  // Do not let cv.elw cause core_sleep_o during debug
   assign debug_p_elw_no_sleep_o = debug_mode_q || debug_req_q || debug_single_step_i || trigger_match_i;
 
   // Do not let WFI cause core_sleep_o (but treat as NOP):
   //
   // - During debug
-  // - For PULP Cluster (only p.elw can trigger sleep)
+  // - For PULP Cluster (only cv.elw can trigger sleep)
 
-  assign debug_wfi_no_sleep_o = debug_mode_q || debug_req_pending || debug_single_step_i || trigger_match_i || PULP_CLUSTER;
+  assign debug_wfi_no_sleep_o = debug_mode_q || debug_req_pending || debug_single_step_i || trigger_match_i || COREV_CLUSTER;
 
   // Gate off wfi 
   assign wfi_active = wfi_i & ~debug_wfi_no_sleep_o;
@@ -1523,26 +1556,26 @@ endgenerate
   assert property (
     @(posedge clk) (branch_taken_ex_i) |=> (~branch_taken_ex_i) ) else $warning("Two branches back-to-back are taken");
 
-  // ELW_EXE and IRQ_FLUSH_ELW states are only used for PULP_CLUSTER = 1
+  // ELW_EXE and IRQ_FLUSH_ELW states are only used for COREV_CLUSTER = 1
   property p_pulp_cluster_only_states;
-     @(posedge clk) (1'b1) |-> ( !((PULP_CLUSTER == 1'b0) && ((ctrl_fsm_cs == ELW_EXE) || (ctrl_fsm_cs == IRQ_FLUSH_ELW))) );
+     @(posedge clk) (1'b1) |-> ( !((COREV_CLUSTER == 1'b0) && ((ctrl_fsm_cs == ELW_EXE) || (ctrl_fsm_cs == IRQ_FLUSH_ELW))) );
   endproperty
 
   a_pulp_cluster_only_states : assert property(p_pulp_cluster_only_states);
 
-  // WAIT_SLEEP and SLEEP states are never used for PULP_CLUSTER = 1
+  // WAIT_SLEEP and SLEEP states are never used for COREV_CLUSTER = 1
   property p_pulp_cluster_excluded_states;
-     @(posedge clk) (1'b1) |-> ( !((PULP_CLUSTER == 1'b1) && ((ctrl_fsm_cs == SLEEP) || (ctrl_fsm_cs == WAIT_SLEEP))) );
+     @(posedge clk) (1'b1) |-> ( !((COREV_CLUSTER == 1'b1) && ((ctrl_fsm_cs == SLEEP) || (ctrl_fsm_cs == WAIT_SLEEP))) );
   endproperty
 
   a_pulp_cluster_excluded_states : assert property(p_pulp_cluster_excluded_states);
 
   generate
-  if (PULP_XPULP) begin : gen_pulp_xpulp_assertions
+  if (COREV_PULP) begin : gen_pulp_xpulp_assertions
 
     // HWLoop 0 and 1 having target address constraints
     property p_hwlp_same_target_address;
-       @(posedge clk) (hwlp_counter_i[1] > 1 && hwlp_counter_i[0] > 1) |-> ( hwlp_end_addr_i[1] >= hwlp_end_addr_i[0] + 8 );
+       @(posedge clk) (hwlp_counter_i[1] > 1 && hwlp_counter_i[0] > 1 && pc_id_i >= hwlp_start_addr_i[0] && pc_id_i <= hwlp_end_addr_i[0] - 4) |-> ( hwlp_end_addr_i[1] - 4 >= hwlp_end_addr_i[0] - 4 + 8 );
     endproperty
 
     a_hwlp_same_target_address : assert property(p_hwlp_same_target_address) else $warning("%t, HWLoops target address do not respect constraints", $time);
@@ -1551,10 +1584,11 @@ endgenerate
 
     property p_no_hwlp;
        @(posedge clk) (1'b1) |-> ((pc_mux_o != PC_HWLOOP) && (ctrl_fsm_cs != DECODE_HWLOOP) &&
-                                  (hwlp_mask_o == 1'b0) && (is_hwlp_illegal == 'b0) && (is_hwlp_body == 'b0) &&
+                                  (hwlp_mask_o == 1'b0) && (is_hwlp_body == 'b0) &&
                                   (hwlp_start_addr_i == 'b0) && (hwlp_end_addr_i == 'b0) && (hwlp_counter_i[1] == 32'b0) && (hwlp_counter_i[0] == 32'b0) &&
                                   (hwlp_dec_cnt_o == 2'b0) && (hwlp_jump_o == 1'b0) && (hwlp_targ_addr_o == 32'b0) &&
                                   (hwlp_end0_eq_pc == 1'b0) && (hwlp_end1_eq_pc == 1'b0) && (hwlp_counter0_gt_1 == 1'b0) && (hwlp_counter1_gt_1 == 1'b0) &&
+                                  (hwlp_counter0_eq_1 == 1'b0) && (hwlp_counter1_eq_1 == 1'b0) &&
                                   (hwlp_end0_eq_pc_plus4 == 1'b0) && (hwlp_end1_eq_pc_plus4 == 1'b0) && (hwlp_start0_leq_pc == 0) && (hwlp_start1_leq_pc == 0) &&
                                   (hwlp_end0_geq_pc == 1'b0) && (hwlp_end1_geq_pc == 1'b0) && (hwlp_end_4_id_d == 1'b0) && (hwlp_end_4_id_q == 1'b0));
     endproperty
